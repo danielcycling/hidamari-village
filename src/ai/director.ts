@@ -10,8 +10,18 @@ import type {
   Simulation,
 } from '../world/sim';
 import type { OllamaClient } from './llm';
-import { AGREEMENT_TYPES, buildMessages, buildSchema, MAX_LINE_CHARS, type RawConversation } from './prompt';
-import { ITEM_IDS } from '../world/economy';
+import {
+  AGREEMENT_TYPES,
+  buildAgreementMessages,
+  buildAgreementSchema,
+  buildMessages,
+  buildSchema,
+  MAX_LINE_CHARS,
+  type ConversationContext,
+  type RawAgreement,
+  type RawConversation,
+} from './prompt';
+import { ITEM_IDS, ITEMS } from '../world/economy';
 
 /** 未接続のときに再接続を試みる間隔（ミリ秒） */
 const RECONNECT_INTERVAL = 15_000;
@@ -40,13 +50,13 @@ export class ConversationDirector {
 
   private async compose(conv: Conversation) {
     try {
-      const ctx = {
+      const ctx: ConversationContext = {
         a: conv.a,
         b: conv.b,
         placeName: conv.placeName,
         dateTime: this.sim.clock.format(),
         hour: this.sim.clock.hourOfDay,
-        weather: this.sim.weather.kind === 'rain' ? '雨' : '晴れ',
+        weather: this.sim.describeWeather('now'),
         news: this.sim.recentNews().slice(-5).map((n) => `${n.day}日目 ${n.time}: ${n.text}`),
         sim: this.sim,
         purpose: conv.purpose,
@@ -56,10 +66,25 @@ export class ConversationDirector {
       if (!parsed) throw new Error('AIの返事を会話として読み取れなかった');
       this.lastError = null;
       this.sim.setDialogue(conv, parsed.lines, parsed.outcome);
+      // 会話を流しているあいだに、決まったことを別に書き出す（7Bは1回で両方やると取りこぼす）
+      void this.extractAgreements(conv, ctx, raw);
     } catch (e) {
       this.lastError = e instanceof Error ? e.message : String(e);
       console.warn('[director]', e);
       this.sim.fallbackToGreeting(conv);
+    }
+  }
+
+  private async extractAgreements(conv: Conversation, ctx: ConversationContext, raw: RawConversation) {
+    try {
+      const lines = (raw.lines ?? []).map((l) => ({ speaker: l.speaker, text: clean(l.text, MAX_LINE_CHARS + 20) }));
+      const res = await this.llm.chatJSON<{ agreements?: RawAgreement[] }>(
+        buildAgreementMessages(ctx, lines, clean(raw.summary, 80)),
+        buildAgreementSchema(ctx),
+      );
+      this.sim.addAgreements(conv, parseAgreements(conv, res.agreements ?? [], lines.map((l) => l.text)));
+    } catch (e) {
+      console.warn('[director] agreements', e);
     }
   }
 }
@@ -89,7 +114,21 @@ function parse(
       impression: hasForeignWords(impression) ? '' : impression,
     });
   }
-  const agreements: Agreement[] = (raw.agreements ?? []).flatMap((ag): Agreement[] => {
+  const summary = clean(raw.summary, 80);
+  return {
+    lines,
+    outcome: {
+      agreements: [],
+      summary: summary && !hasForeignWords(summary) ? summary : `${conv.a.profile.name}と${conv.b.profile.name}は少し話をした`,
+      reflections,
+    },
+  };
+}
+
+/** 書き出された取り決めを検証する（同じものが重ねて出たら1つにまとめる） */
+function parseAgreements(conv: Conversation, raw: RawAgreement[], spoken: string[]): Agreement[] {
+  const byName = new Map([conv.a, conv.b].map((r) => [r.profile.name, r.profile.id]));
+  const agreements = raw.filter((ag) => grounded(ag, spoken)).flatMap((ag): Agreement[] => {
     const fromId = byName.get(ag.from);
     const toId = byName.get(ag.to);
     if (!fromId || !toId || fromId === toId || !AGREEMENT_TYPES.includes(ag.type as AgreementType)) return [];
@@ -110,15 +149,25 @@ function parse(
       },
     ];
   });
-  const summary = clean(raw.summary, 80);
-  return {
-    lines,
-    outcome: {
-      agreements,
-      summary: summary && !hasForeignWords(summary) ? summary : `${conv.a.profile.name}と${conv.b.profile.name}は少し話をした`,
-      reflections,
-    },
-  };
+  return agreements.filter((ag, i) => agreements.findIndex((o) => JSON.stringify(o) === JSON.stringify(ag)) === i);
+}
+
+/**
+ * 書き出しが会話にもとづいているか。根拠のセリフが実際の会話にあり、
+ * 品物ややりとりの中身がそのセリフに出てくるものだけを認める（記録係のでっち上げを防ぐ）
+ */
+function grounded(ag: RawAgreement, spoken: string[]): boolean {
+  const quote = String(ag.quote ?? '').replace(/[「」『』\s]/g, '');
+  if (quote.length < 4) return false;
+  const norm = (t: string) => t.replace(/[「」『』\s]/g, '');
+  // セリフの一部か、セリフを含んでいれば会話にあったとみなす（多少の言い換えは許す）
+  const line = spoken.map(norm).find((t) => t.includes(quote.slice(0, 8)) || quote.includes(t.slice(0, 8)));
+  if (!line) return false;
+  const item = ITEM_IDS.includes(ag.item as ItemId) ? ITEMS[ag.item as ItemId].name : '';
+  const ctx = `${quote}${line}`;
+  if (['trade', 'gift'].includes(ag.type) && item && !ctx.includes(item)) return false;
+  if (['loan', 'repay'].includes(ag.type) && !/\d|G|円|お金|金/.test(ctx)) return false;
+  return true;
 }
 
 /** 4文字以上のアルファベットの並び（英単語など）が混ざっているか */

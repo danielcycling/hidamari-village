@@ -19,6 +19,11 @@ const PREFERRED_MODELS = [
 const isReasoningModel = (name: string) => /(^|[-_:/])r1|deepseek-r1|R1-Distill/i.test(name);
 const isEmbeddingModel = (name: string) => /embed/i.test(name);
 
+/** 1回のリクエストを待つ上限 */
+const REQUEST_TIMEOUT_MS = 150_000;
+/** 接続が切れたあと、つなぎ直すまでの間 */
+const RECONNECT_DELAY_MS = 5_000;
+
 export class OllamaClient {
   status: LlmStatus = 'connecting';
   model: string | null = null;
@@ -66,10 +71,16 @@ export class OllamaClient {
   async chatJSON<T>(messages: ChatMessage[], schema: object, signal?: AbortSignal): Promise<T> {
     if (!this.model) throw new Error('model not selected');
     this.inFlight++;
+    // 返事が来ないまま枠を占有し続けないよう、時間を切る（混んでいて待たされる分も含む）
+    const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
     try {
-      return await this.request<T>(messages, schema, signal);
+      return await this.request<T>(messages, schema, signal ? AbortSignal.any([signal, timeout]) : timeout);
     } catch (e) {
-      if (e instanceof TypeError) this.status = 'offline'; // fetch 自体が失敗した
+      // fetch 自体が失敗した：いったん offline にして、少し待ってつなぎ直す
+      if (e instanceof TypeError && this.status === 'ready') {
+        this.status = 'offline';
+        setTimeout(() => void this.connect(this.model), RECONNECT_DELAY_MS);
+      }
       throw e;
     } finally {
       this.inFlight--;

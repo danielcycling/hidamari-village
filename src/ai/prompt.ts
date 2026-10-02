@@ -2,6 +2,7 @@ import { describeInventory, foodValue, ITEM_IDS, ITEMS, SKILL_IDS, SKILLS } from
 import { ACTIONS, DAILY_NEED, WORK_ACTIONS } from '../world/planner';
 import type { Resident, Simulation } from '../world/sim';
 import type { ChatMessage } from './llm';
+import { topicNotice } from './topics';
 
 export const MIN_LINES = 4;
 export const MAX_LINES = 8;
@@ -39,9 +40,11 @@ export interface RawAgreement {
   days?: number;
   work?: string;
   text?: string;
+  /** 根拠になったセリフ（そのまま抜き出す） */
+  quote?: string;
 }
 
-export const AGREEMENT_TYPES = ['trade', 'gift', 'loan', 'repay', 'hire', 'quit', 'promise'] as const;
+export const AGREEMENT_TYPES = ['trade', 'gift', 'loan', 'repay', 'hire', 'quit', 'teach', 'promise'] as const;
 
 const SYSTEM_PROMPT = `あなたは小さな村「ひだまり村」の観察記録係です。
 村人2人がばったり出会った場面の会話を書いてください。
@@ -60,7 +63,7 @@ const SYSTEM_PROMPT = `あなたは小さな村「ひだまり村」の観察記
 - あいさつや天気の話だけで終わらせない。相談、取引の話、頼みごと、からかい、口論など、少しでも関係が動くようにする。
 - 無理に仲良くさせない。人物の状況や記憶に理由があれば、不満・嫉妬・恨み・怒り・軽蔑も自然に出してよい。反対に、理由がないのに対立させる必要もない。
 - 好感度は会話の内容に応じて -15〜+15 の範囲で変える。上がることも下がることも同じくらい普通にある。
-- 会話の中で、物やお金のやりとり・貸し借り・雇う雇われる・約束がはっきりまとまったときだけ、agreements に書く。断られた・話だけで終わったものは書かない。持っていない物やお金は渡せない。何も決まらなければ空の配列にする。
+- 持っていない物やお金は渡せない。やりとりは、それぞれが持っている範囲でしか決まらない。
 - セリフ・summary・memory・impression は**すべて自然な日本語**で書く。英語や他の言語の単語を混ぜない。
 - 出力は指定のJSONのみ。`;
 
@@ -131,6 +134,7 @@ function describe(sim: Simulation, self: Resident, other: Resident): string {
     ...between(sim, self, other),
     `最近の記憶:`,
     ...(memories.length > 0 ? memories.map((m) => `- ${m.day}日目 ${m.time}: ${m.text}`) : ['- 特になし']),
+    ...[topicNotice(memories.map((m) => m.text))].filter(Boolean),
   ].join('\n');
 }
 
@@ -150,7 +154,6 @@ export function buildMessages(ctx: ConversationContext): ChatMessage[] {
       ? `${a.profile.name}は「${ctx.purpose}」という用で${b.profile.name}に会いに来た。最初に話しかけるのは${a.profile.name}です。`
       : `最初に話しかけるのは${a.profile.name}です。`,
     `summary には会話で何が起きたかを1文で書く。`,
-    `agreements の書き方: type は ${AGREEMENT_TYPES.join('/')}。trade は from=売る人・to=買う人・item・qty・money=代金の合計。gift は from=あげる人・to=もらう人・item と qty、または money。loan は from=貸す人・to=借りる人・money・days=返すまでの日数。repay は from=返す人・to=貸した人・money。hire は from=雇う人・to=雇われる人・work=仕事（${WORK_ACTIONS.map((w) => `${w}=${ACTIONS[w].label}`).join('、')}）・money=日給・days=日数。quit は from=辞める人・to=雇い主。promise は from=約束する人・to=相手・text=約束の中身。品物の item は ${ITEM_IDS.map((id) => `${id}=${ITEMS[id].name}`).join('、')}。`,
     `reflections には、それぞれの人物がこの会話から覚えておくこと（memory。新しく知ったこと・約束・噂・感じたことを具体的に。相手の職業など分かりきったことは書かない）、相手への好感度の変化（affinity_change）、相手への今の印象（impression、20文字以内）を書く。`,
   ].join('\n');
   return [
@@ -193,6 +196,52 @@ export function buildSchema(ctx: ConversationContext): object {
         properties: Object.fromEntries(names.map((n) => [n, reflection])),
         required: names,
       },
+    },
+    required: ['lines', 'summary', 'reflections'],
+  };
+}
+
+// ───────────── 会話で決まったことの書き出し ─────────────
+
+const AGREEMENT_SYSTEM = `あなたは村の記録係です。村人2人の会話を読んで、その場で実際にまとまったやりとりだけを書き出します。
+- 2人ともはっきり同意したものだけを書く。持ちかけただけ・断られた・「考えておく」で終わったものは書かない。
+- 会話の中で物を「もらう」「分けてもらう」「借りる」と決まったら gift（品物）。あとで返す約束もしていれば、それは promise として別に書く。
+- お金の貸し借りは loan、借りたお金を返すのは repay。代金を払って物を受け取るのは trade。
+- 「手伝う」「明日〜する」のような、その場では何も動かない約束は promise。
+- 持っていない物やお金は渡せない。持ち物と所持金をよく見る。
+- quote には、そのやりとりが決まった根拠のセリフを会話からそのまま抜き出す。品物の名前や数・金額が、会話の中で実際に言われていなければ書かない（数を自分で補わない）。
+- 何もまとまっていなければ、agreements は空の配列にする。
+- text は日本語で書く。出力はJSONのみ。`;
+
+export function buildAgreementMessages(
+  ctx: ConversationContext,
+  lines: { speaker: string; text: string }[],
+  summary: string,
+): ChatMessage[] {
+  const who = (r: Resident) =>
+    `${r.profile.name}: 所持金${r.money}G、持ち物 ${describeInventory(r.inventory)}、腕前 ${SKILL_IDS.map((s) => `${SKILLS[s]}${Math.round(r.skills[s])}`).join('・')}`;
+  const user = [
+    who(ctx.a),
+    who(ctx.b),
+    '',
+    '会話:',
+    ...lines.map((l) => `${l.speaker}「${l.text}」`),
+    '',
+    `まとめ: ${summary}`,
+    '',
+    `agreements の書き方: type は ${AGREEMENT_TYPES.join('/')}。trade は from=売る人・to=買う人・item・qty・money=代金の合計。gift は from=あげる人・to=もらう人・item と qty、または money。loan は from=貸す人・to=借りる人・money・days=返すまでの日数。repay は from=返す人・to=貸した人・money。hire は from=雇う人・to=雇われる人・work=仕事（${WORK_ACTIONS.map((w) => `${w}=${ACTIONS[w].label}`).join('、')}）・money=日給・days=日数。quit は from=辞める人・to=雇い主。teach は from=教える人・to=教わる人・work=教える仕事（その場で教える。教える人のほうが上手でないと効果はない）。promise は from=約束する人・to=相手・text=約束の中身。品物の item は ${ITEM_IDS.map((id) => `${id}=${ITEMS[id].name}`).join('、')}。`,
+  ].join('\n');
+  return [
+    { role: 'system', content: AGREEMENT_SYSTEM },
+    { role: 'user', content: user },
+  ];
+}
+
+export function buildAgreementSchema(ctx: ConversationContext): object {
+  const names = [ctx.a.profile.name, ctx.b.profile.name];
+  return {
+    type: 'object',
+    properties: {
       agreements: {
         type: 'array',
         maxItems: 3,
@@ -208,11 +257,12 @@ export function buildSchema(ctx: ConversationContext): object {
             days: { type: 'integer', minimum: 0, maximum: 14 },
             work: { type: 'string', enum: [...WORK_ACTIONS, ''] },
             text: { type: 'string' },
+            quote: { type: 'string' },
           },
-          required: ['type', 'from', 'to'],
+          required: ['type', 'quote', 'from', 'to'],
         },
       },
     },
-    required: ['lines', 'summary', 'reflections', 'agreements'],
+    required: ['agreements'],
   };
 }

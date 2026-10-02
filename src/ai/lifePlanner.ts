@@ -9,6 +9,7 @@ import {
   parseCrisis,
   parsePlan,
   parseSelfImage,
+  planReview,
   planSchema,
   selfImageSchema,
   type RawCrisis,
@@ -120,8 +121,18 @@ export class LifePlanner {
     if (!r) return;
     try {
       if (job.kind === 'plan') {
-        const raw = await this.llm.chatJSON<RawPlan>(buildPlanMessages(this.sim, r, job.day), planSchema());
-        const plan = parsePlan(raw, job.day, r, this.sim);
+        const messages = buildPlanMessages(this.sim, r, job.day);
+        const raw = await this.llm.chatJSON<RawPlan>(messages, planSchema());
+        let plan = parsePlan(raw, job.day, r, this.sim);
+        // 食べ物の見込みが足りなければ、その事実を見せてもう一度だけ考えてもらう
+        const review = plan && planReview(this.sim, r, plan);
+        if (review) {
+          const again = await this.llm.chatJSON<RawPlan>(
+            [...messages, { role: 'assistant', content: JSON.stringify(raw) }, { role: 'user', content: review }],
+            planSchema(),
+          );
+          plan = parsePlan(again, job.day, r, this.sim) ?? plan;
+        }
         if (plan) this.sim.setNextPlan(r, plan);
         this.progress.done++;
       } else if (job.kind === 'crisis') {

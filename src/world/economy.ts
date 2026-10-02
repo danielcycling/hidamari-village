@@ -146,12 +146,12 @@ export const HUNGRY_BELOW = 30;
 
 /**
  * 畑仕事1時間あたりの収穫（熟練係数を掛ける前）。
- * 素人が1日6.5時間働いて、自分で焼いたパンと野菜でやっと1日分（約80）になる量。
- * 達人の農家と達人のパン職人が組めば、5人ほどを養える。
+ * 素人が1日6時間働いて、自分で焼いたパンと野菜でやっと1日分（約80）になる量。
+ * 慣れれば4時間ほどで足り、残りの時間を人付き合いや商売に回せる。
  */
-export const FARM_PER_HOUR = { wheat: 0.6, vegetable: 0.5 };
-/** 釣り1時間あたりに釣れる見込み（熟練係数を掛ける前）。素人だと1日分にわずかに届かない */
-export const FISH_PER_HOUR = 0.7;
+export const FARM_PER_HOUR = { wheat: 1.0, vegetable: 0.8 };
+/** 釣り1時間あたりに釣れる見込み（熟練係数を掛ける前）。素人でも6時間ほどで1日分 */
+export const FISH_PER_HOUR = 1.1;
 /** パン焼き・料理の1回にかかる分 */
 export const CRAFT_MINUTES = 30;
 

@@ -1,4 +1,5 @@
 import type { Inventory, SkillId } from './economy';
+import type { Condition } from './weather';
 import type { DailyPlan } from './planner';
 import type { Relation, ResidentProfile } from './residents';
 import {
@@ -6,6 +7,7 @@ import {
   type DayRecord,
   type DayStats,
   type Debt,
+  type Delivery,
   type Employment,
   type Estate,
   type Gathering,
@@ -58,9 +60,13 @@ export interface SaveData {
   market: { today: MarketDay; yesterday: MarketDay };
   debts?: Debt[];
   employments?: Employment[];
+  deliveries?: Delivery[];
   dealSeq?: number;
   news: News[];
   weather: { kind: WeatherKind; until: number };
+  dayWeather?: WeatherKind;
+  forecast?: WeatherKind;
+  conditions?: Condition[];
   gatherings: Gathering[];
   lastMet: [string, number][];
   conversationSeq: number;
@@ -104,9 +110,13 @@ export function serialize(sim: Simulation, autoGod: boolean): SaveData {
     market: sim.market,
     debts: sim.debts,
     employments: sim.employments,
+    deliveries: sim.deliveries,
     dealSeq: sim.dealSeq,
     news: sim.news,
     weather: sim.weather,
+    dayWeather: sim.dayWeather,
+    forecast: sim.forecast,
+    conditions: sim.conditions,
     gatherings: sim.gatherings,
     lastMet: [...sim.lastMet],
     conversationSeq: sim.conversationSeq,
@@ -169,9 +179,13 @@ export function restore(sim: Simulation, data: SaveData): void {
   if (data.market) sim.market = data.market;
   replace(sim.debts, data.debts ?? []);
   replace(sim.employments, data.employments ?? []);
+  replace(sim.deliveries, data.deliveries ?? []);
   sim.dealSeq = data.dealSeq ?? 0;
   replace(sim.news, data.news);
   sim.weather = data.weather;
+  sim.dayWeather = data.dayWeather ?? (data.weather.until > 0 ? 'clear' : data.weather.kind);
+  sim.forecast = data.forecast ?? 'clear';
+  replace(sim.conditions, data.conditions ?? []);
   replace(sim.gatherings, data.gatherings);
   sim.lastMet.clear();
   for (const [k, v] of data.lastMet) sim.lastMet.set(k, v);

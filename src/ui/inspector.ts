@@ -152,6 +152,11 @@ export class Inspector {
       if (d.lenderId === r.profile.id) lines.push(`${name(d.borrowerId)}に${d.remaining}G貸している（${d.dueDay}日目まで${late}）`);
       if (d.borrowerId === r.profile.id) lines.push(`${name(d.lenderId)}から${d.remaining}G借りている（${d.dueDay}日目まで${late}）`);
     }
+    for (const d of this.sim.deliveries) {
+      const what = `${ITEMS[d.item].name}${d.qty}個・${d.money}G・${d.dueDay}日目まで`;
+      if (d.sellerId === r.profile.id) lines.push(`${name(d.buyerId)}に渡す約束（${what}）`);
+      if (d.buyerId === r.profile.id) lines.push(`${name(d.sellerId)}から受け取る約束（${what}）`);
+    }
     for (const e of this.sim.employments) {
       const job = ACTIONS[e.action].label;
       if (e.employerId === r.profile.id) lines.push(`${name(e.employeeId)}を雇っている（${job}・日給${e.wage}G・${e.untilDay}日目まで）`);

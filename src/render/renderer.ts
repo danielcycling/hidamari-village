@@ -62,7 +62,8 @@ export class Renderer {
     const hour = sim.clock.hourOfDay;
     const festival = sim.activeGathering();
     if (festival) this.drawLanterns(festival.placeId, now);
-    if (sim.weather.kind === 'rain') this.drawRain(now);
+    if (sim.weather.kind === 'rain' || sim.weather.kind === 'storm') this.drawRain(now, sim.weather.kind === 'storm');
+    else if (sim.weather.kind === 'cloudy') this.drawClouds();
     this.drawLighting(sim, hour);
     if (festival) this.drawLanternGlow(festival.placeId, hour);
 
@@ -196,16 +197,25 @@ export class Renderer {
     ctx.fillRect(x + 2, y + 4, 4, 1);
   }
 
-  private drawRain(now: number) {
+  private drawClouds() {
+    const { ctx, map } = this;
+    ctx.fillStyle = 'rgba(70, 75, 95, 0.14)';
+    ctx.fillRect(0, 0, map.width * TILE, map.height * TILE);
+  }
+
+  private drawRain(now: number, storm = false) {
     const { ctx, map } = this;
     const w = map.width * TILE;
     const h = map.height * TILE;
-    ctx.fillStyle = 'rgba(40, 55, 85, 0.28)';
+    ctx.fillStyle = storm ? 'rgba(25, 32, 55, 0.42)' : 'rgba(40, 55, 85, 0.28)';
     ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = 'rgba(190, 215, 255, 0.55)';
-    for (let i = 0; i < 260; i++) {
+    // 嵐は雨粒が多く、横殴りに降る
+    const drops = storm ? 520 : 260;
+    const wind = storm ? 1.1 : 0.35;
+    for (let i = 0; i < drops; i++) {
       const speed = 0.18 + hash2(i, 7) * 0.08;
-      const x = (hash2(i, 1) * w + now * speed * 0.35) % w;
+      const x = (hash2(i, 1) * w + now * speed * wind) % w;
       const y = (hash2(i, 2) * h + now * speed) % h;
       ctx.fillRect(Math.floor(x), Math.floor(y), 1, 4);
     }

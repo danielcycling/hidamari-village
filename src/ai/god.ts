@@ -104,7 +104,7 @@ export class AutoGod {
     const { sim } = this;
     const roll = Math.random();
     const preset = (id: string) => PRESETS.find((p) => p.id === id)!;
-    if (roll < 0.12 && sim.weather.kind === 'clear') return preset('rain').run(sim);
+    if (roll < 0.12 && sim.weather.kind !== 'rain' && sim.weather.kind !== 'storm') return preset('rain').run(sim);
     if (roll < 0.22 && sim.clock.hourOfDay < 16 && !this.hasUpcomingGathering()) {
       return preset('festival').run(sim);
     }

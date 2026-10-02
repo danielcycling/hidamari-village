@@ -1,5 +1,16 @@
 import { Emitter } from '../core/emitter';
 import { mulberry32, randInt, type Rng } from '../core/rng';
+import {
+  CONDITIONS,
+  FORECAST_ACCURACY,
+  isWet,
+  productionFactor,
+  rollCondition,
+  rollWeather,
+  WEATHER,
+  type Condition,
+  type WeatherKind,
+} from './weather';
 import { Clock } from './clock';
 import {
   addItem,
@@ -61,6 +72,12 @@ import { rectContains, type Place, type Point, type WorldMap } from './types';
 const WALK_SPEED = 1;
 /** 同じ2人が再び話し始めるまでの間隔（分） */
 const MEET_COOLDOWN = 180;
+/**
+ * 会話で2人が立ち止まる村の時間（分）。セリフは読める速さで流すので現実では数十秒かかるが、
+ * それに合わせて村の時間まで止めると、話すたびに何時間も働けなくなってしまう。
+ */
+const AI_TALK_MINUTES = 15;
+const GREETING_TALK_MINUTES = 3;
 /** あいさつ1行にかかる村の時間（分） */
 const GREETING_LINE_MINUTES = 1.5;
 /** AIの返事をこれ以上待たない（現実の秒） */
@@ -77,6 +94,8 @@ const BUY_INTERVAL = 15;
 export const PLANNING_HOUR = 21;
 /** 新入村民が来るかどうかを判定する時刻（時） */
 const IMMIGRATION_HOUR = 10;
+/** その日の空模様が決まる時刻 */
+const WEATHER_HOUR = 5;
 const MAX_HISTORY_DAYS = 7;
 /** パンを焼く予定の人が、市場で買いそろえる小麦の数 */
 const WHEAT_TO_BUY = 4;
@@ -199,6 +218,19 @@ export interface Debt {
   lastComplainedDay?: number;
 }
 
+/** 「品物ができたら渡す」という、まだ果たされていない売買 */
+export interface Delivery {
+  id: number;
+  sellerId: string;
+  buyerId: string;
+  item: ItemId;
+  qty: number;
+  /** 受け渡しのときに払う代金 */
+  money: number;
+  createdDay: number;
+  dueDay: number;
+}
+
 /** 雇用 */
 export interface Employment {
   id: number;
@@ -212,12 +244,12 @@ export interface Employment {
   workedToday: number;
 }
 
-export type AgreementType = 'trade' | 'gift' | 'loan' | 'repay' | 'hire' | 'quit' | 'promise';
+export type AgreementType = 'trade' | 'gift' | 'loan' | 'repay' | 'hire' | 'quit' | 'teach' | 'promise';
 
 /**
  * 会話の中で決まったこと。from/to の意味は種類ごとに違う：
  * trade=売り手/買い手、gift=あげる人/もらう人、loan=貸す人/借りる人、repay=返す人/返される人、
- * hire=雇う人/雇われる人、quit=辞める人/雇い主、promise=約束する人/される人
+ * hire=雇う人/雇われる人、quit=辞める人/雇い主、teach=教える人/教わる人、promise=約束する人/される人
  */
 export interface Agreement {
   type: AgreementType;
@@ -282,6 +314,8 @@ export interface Conversation {
   outcome: ConversationOutcome | null;
   /** 会いに行った側の目的（会いに来た会話のときだけ） */
   purpose?: string;
+  /** 2人が立ち止まって話している時刻の終わり（村の分） */
+  engagedUntil: number;
 }
 
 export interface LogEntry {
@@ -330,7 +364,7 @@ export interface News {
   text: string;
 }
 
-export type WeatherKind = 'clear' | 'rain';
+export type { WeatherKind } from './weather';
 
 /** 一定時間、全員の予定を上書きする（お祭りなど） */
 export interface Gathering {
@@ -378,7 +412,14 @@ export class Simulation {
   /** 出会ったときにAIで会話させるか、あいさつで済ませるかを決める */
   conversationGate: (a: Resident, b: Resident) => Conversation['kind'] = () => 'greeting';
   readonly news: News[] = [];
+  /** 今の空。until > 0 なら神さまが降らせた一時的な雨で、過ぎると dayWeather に戻る */
   weather: { kind: WeatherKind; until: number } = { kind: 'clear', until: 0 };
+  /** 今日の本来の空模様 */
+  dayWeather: WeatherKind = 'clear';
+  /** 前の晩の見立て（明日の空模様） */
+  forecast: WeatherKind = 'clear';
+  /** 数日続く出来事（日照り・豊漁など） */
+  readonly conditions: Condition[] = [];
   readonly gatherings: Gathering[] = [];
   readonly graves: Grave[] = [];
   readonly estates: Record<string, Estate> = {};
@@ -392,6 +433,7 @@ export class Simulation {
   holdingDawn = false;
   readonly debts: Debt[] = [];
   readonly employments: Employment[] = [];
+  readonly deliveries: Delivery[] = [];
   dealSeq = 0;
   /**
    * 飢えかけた住民の判断をLLMに頼む。引き受けたら true（あとで setOverride が呼ばれる）。
@@ -404,6 +446,8 @@ export class Simulation {
   readonly lastMet = new Map<string, number>();
   conversationSeq = 0;
   private readonly rng: Rng;
+  /** 天気は別の乱数で決める（天気が住民の行動の乱数をずらさないように） */
+  private readonly weatherRng: Rng;
   private lastHour = -1;
   private lastDay = 0;
   private lastEveningDay = 0;
@@ -416,6 +460,7 @@ export class Simulation {
     seed = 1,
   ) {
     this.rng = mulberry32(seed);
+    this.weatherRng = mulberry32(seed ^ 0x5eed);
     for (const profile of profiles) {
       this.createResident(profile, {
         money: startingMoney,
@@ -483,6 +528,17 @@ export class Simulation {
     this.announceLine(conv);
   }
 
+  /** 会話のあとで書き出された取り決めを加える。会話がもう終わっていれば、すぐ実行する */
+  addAgreements(conv: Conversation, agreements: Agreement[]): void {
+    if (agreements.length === 0 || !conv.outcome) return;
+    if (this.conversations.includes(conv)) {
+      conv.outcome.agreements.push(...agreements);
+      return;
+    }
+    if (!this.residents.includes(conv.a) || !this.residents.includes(conv.b)) return;
+    for (const ag of agreements) this.carryOut(conv, ag);
+  }
+
   /** AIが会話を考えられなかったときは、あいさつで済ませる */
   fallbackToGreeting(conv: Conversation): void {
     if (!this.conversations.includes(conv) || conv.lines) return;
@@ -527,7 +583,7 @@ export class Simulation {
   }
 
   startRain(hours: number): void {
-    this.weather = { kind: 'rain', until: this.clock.minutes + hours * 60 };
+    this.weather = { kind: isWet(this.weather.kind) ? this.weather.kind : 'rain', until: this.clock.minutes + hours * 60 };
     this.announce('雨が降り出した。ぶらついていた人たちは家へ急いでいる');
   }
 
@@ -703,6 +759,7 @@ export class Simulation {
     if (hour === this.lastHour) return;
     this.lastHour = hour;
     this.events.emit('hourly', { day: this.clock.day, hour: hour % 24 });
+    this.settleDeliveries();
     this.updateWeather();
     for (const r of this.residents) {
       const spoiled = removeSpoiled(r.inventory, this.clock.minutes);
@@ -716,9 +773,11 @@ export class Simulation {
     if (h >= WAKE_AT && h < WAKE_AT + 1) {
       for (const r of [...this.residents]) if (r.plan?.day !== this.clock.day) this.makePlan(r);
     }
+    if (h >= WEATHER_HOUR && h < WEATHER_HOUR + 1) this.startDayWeather();
     if (h >= IMMIGRATION_HOUR && h < IMMIGRATION_HOUR + 1) this.tryImmigration();
     if (h >= PLANNING_HOUR && this.lastEveningDay !== this.clock.day) {
       this.lastEveningDay = this.clock.day;
+      this.makeForecast();
       this.events.emit('evening', { day: this.clock.day });
     }
   }
@@ -782,6 +841,38 @@ export class Simulation {
         this.log(`${employee.profile.name}が${employer.profile.name}のもとで働く期間が終わった`, 'deal');
         this.remember(employee, `${employer.profile.name}に雇われる期間が終わった`);
         this.remember(employer, `${employee.profile.name}を雇う期間が終わった`);
+      }
+    }
+  }
+
+  /** 納品待ちの売買：品物がそろったら受け渡し、期限を過ぎたら買い手の恨みになる */
+  private settleDeliveries() {
+    for (const d of [...this.deliveries]) {
+      const seller = this.get(d.sellerId);
+      const buyer = this.get(d.buyerId);
+      const drop = () => this.deliveries.splice(this.deliveries.indexOf(d), 1);
+      if (!seller || !buyer) {
+        drop();
+        continue;
+      }
+      const name = ITEMS[d.item].name;
+      if (countItem(seller.inventory, d.item) >= d.qty && buyer.money >= d.money) {
+        moveItems(seller.inventory, buyer.inventory, d.item, d.qty, this.clock.minutes);
+        buyer.money -= d.money;
+        seller.money += d.money;
+        buyer.today.spent += d.money;
+        seller.today.earned += d.money;
+        addCount(seller.today.sold, d.item, d.qty);
+        addCount(buyer.today.bought, d.item, d.qty);
+        drop();
+        this.log(`${seller.profile.name}が約束どおり${buyer.profile.name}に${name}${d.qty}個を渡した（${d.money}G）`, 'deal');
+        this.feel(buyer, seller, 3, `${this.clock.day}日目、約束どおり${name}を届けてくれた`);
+      } else if (this.clock.day > d.dueDay) {
+        drop();
+        this.log(`${seller.profile.name}は${buyer.profile.name}に${name}${d.qty}個を渡す約束を守れなかった`, 'deal');
+        this.feel(buyer, seller, -6, `${this.clock.day}日目、${name}を渡すと約束したのに守らなかった`);
+        this.remember(buyer, `${seller.profile.name}が${name}${d.qty}個を渡すと約束したのに、期限までに渡さなかった`);
+        this.remember(seller, `${buyer.profile.name}に${name}${d.qty}個を渡す約束を守れなかった`);
       }
     }
   }
@@ -879,17 +970,64 @@ export class Simulation {
   }
 
   private updateWeather() {
-    if (this.weather.kind === 'rain' && this.clock.minutes >= this.weather.until) {
-      this.weather = { kind: 'clear', until: 0 };
-      this.announce('雨が上がった');
+    if (this.weather.until > 0 && this.clock.minutes >= this.weather.until) {
+      this.weather = { kind: this.dayWeather, until: 0 };
+      if (!isWet(this.dayWeather)) this.announce('雨が上がった');
     }
+  }
+
+  /** 朝5時：今日の空模様と、数日続く出来事を決める */
+  private startDayWeather() {
+    const day = this.clock.day;
+    for (const c of this.conditions.filter((c) => c.untilDay <= day)) {
+      this.conditions.splice(this.conditions.indexOf(c), 1);
+      this.announce(CONDITIONS[c.kind].end, 'system');
+    }
+    const fresh = rollCondition(this.weatherRng, this.conditions, day);
+    if (fresh) {
+      this.conditions.push(fresh);
+      this.announce(CONDITIONS[fresh.kind].start, 'system');
+    }
+    this.dayWeather = this.weatherRng() < FORECAST_ACCURACY ? this.forecast : rollWeather(this.weatherRng, this.conditions);
+    if (this.dayWeather === 'storm' && this.conditions.some((c) => c.kind === 'drought')) this.dayWeather = 'clear';
+    if (this.weather.until <= this.clock.minutes) this.weather = { kind: this.dayWeather, until: 0 };
+    if (this.dayWeather === 'storm') this.announce('嵐がやってきた。川は荒れ、畑仕事もままならない', 'system');
+    else if (this.dayWeather === 'rain') this.announce('朝から雨が降っている', 'system');
+  }
+
+  /** 夜：明日の空模様の見立て（外れることもある） */
+  private makeForecast() {
+    this.forecast = rollWeather(this.weatherRng, this.conditions);
+  }
+
+  /** 今の空模様と出来事による、畑仕事・釣りの倍率 */
+  productionFactor(domain: 'farm' | 'fish'): number {
+    return productionFactor(this.weather.kind, this.conditions, domain);
+  }
+
+  /** 計画づくり用：明日の見立てでの倍率 */
+  forecastFactor(domain: 'farm' | 'fish'): number {
+    return productionFactor(this.forecast, this.conditions, domain);
+  }
+
+  /** 村人が知っている空模様と出来事（プロンプト用） */
+  describeWeather(which: 'now' | 'tomorrow'): string {
+    const kind = which === 'now' ? this.weather.kind : this.forecast;
+    const sky = which === 'now' ? `今の空: ${WEATHER[kind].name}` : `明日の空模様の見立て: ${WEATHER[kind].name}になりそう（外れることもある）`;
+    const note = WEATHER[kind].note ? `。${WEATHER[kind].note}` : '';
+    const cond = this.conditions.map((c) => `${CONDITIONS[c.kind].name}（${CONDITIONS[c.kind].start}）`).join('、');
+    return `${sky}${note}${cond ? `。続いていること: ${cond}` : ''}`;
   }
 
   // ───────────── 1分ごとの住民の更新 ─────────────
 
   private updateResident(r: Resident, dt: number) {
     this.updateBody(r, dt);
-    if (!this.residents.includes(r) || r.conversation) return;
+    if (!this.residents.includes(r)) return;
+    // 話している間は立ち止まる。ただし拘束は村の時間で決まった分だけで、
+    // セリフの表示が続いていても、それを過ぎたら自分の用事に戻る
+    if (r.conversation && this.clock.minutes < r.conversation.engagedUntil) return;
+    if (r.state === 'talking') r.state = r.path.length > 0 ? 'walking' : 'idle';
 
     this.handleHunger(r);
     const task = this.currentTask(r);
@@ -1017,7 +1155,7 @@ export class Simulation {
       }
       action = 'wander';
     }
-    if (this.weather.kind === 'rain' && (action === 'wander' || action === 'beg')) {
+    if (isWet(this.weather.kind) && (action === 'wander' || action === 'beg')) {
       return { placeId: home, action: 'rest', label: '雨宿り', block };
     }
     const def = ACTIONS[action];
@@ -1066,13 +1204,14 @@ export class Simulation {
     switch (action) {
       case 'farm': {
         const f = this.work(worker, 'farm', dt);
-        this.accumulate(worker, owner, 'wheat', FARM_PER_HOUR.wheat * f * (dt / 60));
-        this.accumulate(worker, owner, 'vegetable', FARM_PER_HOUR.vegetable * f * (dt / 60));
+        const w = this.productionFactor('farm');
+        this.accumulate(worker, owner, 'wheat', FARM_PER_HOUR.wheat * f * w * (dt / 60));
+        this.accumulate(worker, owner, 'vegetable', FARM_PER_HOUR.vegetable * f * w * (dt / 60));
         break;
       }
       case 'fish': {
         const f = this.work(worker, 'fish', dt);
-        if (this.rng() < FISH_PER_HOUR * f * (dt / 60)) this.produce(owner, 'fish', 1);
+        if (this.rng() < FISH_PER_HOUR * f * this.productionFactor('fish') * (dt / 60)) this.produce(owner, 'fish', 1);
         break;
       }
       case 'bake':
@@ -1384,6 +1523,7 @@ export class Simulation {
       waited: 0,
       outcome: null,
       purpose,
+      engagedUntil: this.clock.minutes + (kind === 'ai' ? AI_TALK_MINUTES : GREETING_TALK_MINUTES),
     };
     for (const [self, other] of [
       [a, b],
@@ -1449,7 +1589,7 @@ export class Simulation {
     this.lastMet.set(pairKey(conv.a, conv.b), this.clock.minutes);
     for (const r of [conv.a, conv.b]) {
       r.conversation = null;
-      r.state = r.path.length > 0 ? 'walking' : 'idle';
+      if (r.state === 'talking') r.state = r.path.length > 0 ? 'walking' : 'idle';
       r.idleUntil = this.clock.minutes + randInt(this.rng, 3, 15);
     }
     // 片方が亡くなっていたら、記憶や関係は更新しない
@@ -1477,7 +1617,7 @@ export class Simulation {
   }
 
   /** 会話で決まったことを実行する。できなければ「果たせなかった」として残る */
-  private carryOut(conv: Conversation, ag: Agreement) {
+  private carryOut(conv: Conversation, ag: Agreement): void {
     const from = this.get(ag.fromId);
     const to = this.get(ag.toId);
     const inConv = (r?: Resident) => r === conv.a || r === conv.b;
@@ -1502,10 +1642,29 @@ export class Simulation {
 
     switch (ag.type) {
       case 'trade': {
-        const what = `${A}が${B}に${itemName}${qty}個を${money}Gで売る`;
         if (!ag.item || qty <= 0) return;
-        if (countItem(from.inventory, ag.item) < qty) return fail(what, `${A}の${itemName}が足りなかった`);
+        // 代金なしの「売買」は、実際にはあげたのと同じ
+        if (money <= 0) return this.carryOut(conv, { ...ag, type: 'gift', money: 0 });
+        const what = `${A}が${B}に${itemName}${qty}個を${money}Gで売る`;
         if (to.money < money) return fail(what, `${B}のお金が足りなかった`);
+        if (countItem(from.inventory, ag.item) < qty) {
+          // 今は持っていない：品物ができたら渡す約束として残す
+          const dueDay = this.clock.day + 2;
+          this.deliveries.push({
+            id: ++this.dealSeq,
+            sellerId: from.profile.id,
+            buyerId: to.profile.id,
+            item: ag.item,
+            qty,
+            money,
+            createdDay: this.clock.day,
+            dueDay,
+          });
+          this.log(`${A}が${B}に、${itemName}${qty}個を手に入れたら${money}Gで渡すと約束した（${dueDay}日目まで）`, 'deal');
+          this.remember(from, `${B}に${itemName}${qty}個を${dueDay}日目までに渡す約束をした（代金${money}G）`);
+          this.remember(to, `${A}から${itemName}${qty}個を${dueDay}日目までに受け取る約束をした（代金${money}G）`);
+          return;
+        }
         moveItems(from.inventory, to.inventory, ag.item, qty, this.clock.minutes);
         moveMoney(to, from, money);
         addCount(from.today.sold, ag.item, qty);
@@ -1598,6 +1757,29 @@ export class Simulation {
         this.employments.splice(this.employments.indexOf(emp), 1);
         this.log(`${A}は${B}のもとで働くのをやめた`, 'deal');
         this.remember(to, `${A}が自分のもとで働くのをやめた`);
+        return;
+      }
+      case 'teach': {
+        // 教える側が上手なら、差の4分の1だけ上達する
+        if (!ag.action) return;
+        const skill = ACTIONS[ag.action].skill;
+        if (!skill) return;
+        const label = SKILLS[skill];
+        const gap = from.skills[skill] - to.skills[skill];
+        if (gap < 5) {
+          this.log(`${A}は${B}に${label}を教えようとしたが、教えられるほどの腕はなかった`, 'deal');
+          // 誰が上手かは、こうした経験から知っていく
+          const theirs = Math.round(from.skills[skill]);
+          const mine = Math.round(to.skills[skill]);
+          this.remember(to, `${A}に${label}を教わろうとしたが、${A}の${label}の腕前（${theirs}）は自分（${mine}）${theirs < mine ? 'より下手だった' : 'とほとんど変わらなかった'}`);
+          this.remember(from, `${B}に${label}を教えようとしたが、自分の腕前（${theirs}）では${B}（${mine}）に教えられることはなかった`);
+          return;
+        }
+        const gain = Math.round(gap * 0.25);
+        to.skills[skill] = Math.min(100, to.skills[skill] + gain);
+        this.log(`${A}が${B}に${label}を教えた（${B}の腕前 +${gain}）`, 'deal');
+        this.remember(to, `${A}に${label}を教わって、少し上達した`);
+        this.feel(to, from, 4, `${this.clock.day}日目、${label}を教えてくれた`);
         return;
       }
       case 'promise': {

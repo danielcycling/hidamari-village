@@ -1,5 +1,6 @@
 import {
   BAKE_INPUT,
+  CRAFT_MINUTES,
   COOK_INPUT,
   countItem,
   describeInventory,
@@ -19,6 +20,7 @@ import { SLEEP_FROM, WAKE_AT } from '../world/residents';
 import type { Resident, Simulation } from '../world/sim';
 import type { ChatMessage } from './llm';
 import { affinityLabel, hungerLabel } from './prompt';
+import { topicNotice } from './topics';
 
 const RECENT_MEMORIES = 8;
 
@@ -128,7 +130,8 @@ function othersReport(sim: Simulation, self: Resident): string {
       const feel = rel ? `あなたの気持ち: ${affinityLabel(rel.affinity)}（${rel.affinity}）「${rel.impression}」` : '';
       const why = rel?.notes?.length ? `（理由: ${rel.notes.slice(0, 2).map((n) => n.text).join('／')}）` : '';
       const looks = o.satiety <= 0 ? 'ひどくやつれている' : o.satiety < 30 ? '腹を空かせている' : '元気そう';
-      const stock = foodValue(o.inventory) >= DAILY_NEED * 2 ? '、食べ物をたくさん抱えている' : '';
+      const food = foodValue(o.inventory);
+      const stock = food >= DAILY_NEED * 2 ? '、食べ物をたくさん抱えている' : food === 0 ? '、食べ物を何も持っていない' : '';
       return `- ${o.profile.name}: 仕事「${o.occupation || 'なし'}」、今日は${mainActivities(o)}。${looks}${stock}。${feel}${why}`;
     })
     .join('\n');
@@ -154,6 +157,17 @@ function ties(sim: Simulation, r: Resident): string[] {
         : `${other.profile.name}から${d.remaining}G借りている。${d.dueDay}日目までに返す約束${late}`,
     );
   }
+  for (const d of sim.deliveries) {
+    const name = ITEMS[d.item].name;
+    if (d.sellerId === r.profile.id) {
+      const who = sim.get(d.buyerId);
+      if (who) lines.push(`${who.profile.name}に${name}${d.qty}個を${d.dueDay}日目までに渡す約束がある（代金${d.money}G）。今${name}は${countItem(r.inventory, d.item)}個`);
+    }
+    if (d.buyerId === r.profile.id) {
+      const who = sim.get(d.sellerId);
+      if (who) lines.push(`${who.profile.name}から${name}${d.qty}個を${d.dueDay}日目までに受け取る約束がある（代金${d.money}G）`);
+    }
+  }
   for (const e of sim.employments) {
     if (e.employerId === r.profile.id) {
       const who = sim.get(e.employeeId);
@@ -178,15 +192,104 @@ function travelTimes(sim: Simulation, r: Resident): string {
     .join('・');
 }
 
-/** 食べ物があと何日もつか、今日どれだけ手に入れたか（本人が分かっている事実） */
+const satietyOf = (counts: Partial<Record<ItemId, number>>) =>
+  ITEM_IDS.reduce((n, id) => n + ITEMS[id].satiety * (counts[id] ?? 0), 0);
+
+/** 食べ物を作るのに使った時間（材料集め・加工） */
+const FOOD_WORK: ActionId[] = ['farm', 'fish', 'bake', 'cook'];
+
+/** 食べ物があと何日もつか、今日の食べ物の収支と時間の使い方（本人が分かっている事実） */
 function outlook(r: Resident): string {
   const days = foodValue(r.inventory) / DAILY_NEED;
   const left = days < 0.25 ? '手元の食べ物はもうほとんどない' : `手元の食べ物はあと${round1(days)}日分ほど`;
-  const gotToday = ITEM_IDS.reduce(
-    (n, id) => n + ITEMS[id].satiety * ((r.today.produced[id] ?? 0) + (r.today.bought[id] ?? 0)),
-    0,
+  const ate = satietyOf(r.today.ate);
+  const got = satietyOf(r.today.produced) + satietyOf(r.today.bought);
+  const work = FOOD_WORK.reduce((n, a) => n + (r.today.hours[a] ?? 0), 0);
+  const social = (['visit', 'wander', 'beg'] as ActionId[]).reduce((n, a) => n + (r.today.hours[a] ?? 0), 0);
+  return `${left}。今日は満腹度${ate}ぶん食べ、${got}ぶん新しく手に入れた（1日に要るのは${DAILY_NEED}）。今日、食べ物づくりに${round1(work)}時間、人に会う・出歩くことに${round1(social)}時間使った`;
+}
+
+/** パン1回分に要る小麦 */
+const WHEAT_PER_BAKE = BAKE_INPUT.wheat ?? 1;
+
+/** 1時間働いて得られる食べ物（満腹度）。畑の小麦はパンに焼く前提 */
+function foodPerHour(r: Resident): { farm: number; fish: number } {
+  const f = (s: keyof typeof SKILLS) => skillFactor(r.skills[s]);
+  const farm =
+    FARM_PER_HOUR.vegetable * f('farm') * ITEMS.vegetable.satiety +
+    (FARM_PER_HOUR.wheat * f('farm') * f('bake') * ITEMS.bread.satiety) / WHEAT_PER_BAKE;
+  return { farm, fish: FISH_PER_HOUR * f('fish') * ITEMS.fish.satiety };
+}
+
+/** 1日分の食べ物を自分で採るのに、だいたい何時間かかるか */
+function hoursForADay(r: Resident): string {
+  const { farm, fish } = foodPerHour(r);
+  return `普段の天気なら、今の腕前で1日分の食べ物（満腹度${DAILY_NEED}）を自分で手に入れるには、畑仕事（小麦はパンに焼く）ならおよそ${round1(DAILY_NEED / farm)}時間、釣りならおよそ${round1(DAILY_NEED / fish)}時間かかる`;
+}
+
+/** 計画どおりに動いたら、新しく手に入る食べ物（満腹度）の見込み。買う・もらう分は含まない */
+export function estimatePlanFood(r: Resident, plan: DailyPlan, weather = { farm: 1, fish: 1 }): number {
+  const f = (s: keyof typeof SKILLS) => skillFactor(r.skills[s]);
+  let wheat = countItem(r.inventory, 'wheat');
+  let food = 0;
+  for (const b of plan.blocks) {
+    const h = b.to - b.from;
+    if (b.action === 'farm') {
+      food += FARM_PER_HOUR.vegetable * f('farm') * weather.farm * h * ITEMS.vegetable.satiety;
+      wheat += FARM_PER_HOUR.wheat * f('farm') * weather.farm * h;
+    } else if (b.action === 'fish') {
+      food += FISH_PER_HOUR * f('fish') * weather.fish * h * ITEMS.fish.satiety;
+    } else if (b.action === 'bake') {
+      const batches = Math.min(Math.floor(wheat / WHEAT_PER_BAKE), Math.floor((h * 60) / CRAFT_MINUTES));
+      food += batches * f('bake') * ITEMS.bread.satiety;
+      wheat -= batches * WHEAT_PER_BAKE;
+    }
+  }
+  return Math.round(food);
+}
+
+/**
+ * 計画の食べ物の見込みが、明日の夜に1日分も残らないほど少なければ、本人に見せて見直してもらう文。
+ * 十分なら null。見直すかどうかは本人しだい。
+ */
+export function planReview(sim: Simulation, r: Resident, plan: DailyPlan): string | null {
+  const est = estimatePlanFood(r, plan, { farm: sim.forecastFactor('farm'), fish: sim.forecastFactor('fish') });
+  const stock = foodValue(r.inventory);
+  if (est + stock >= DAILY_NEED * 2) return null;
+  return [
+    `この計画で新しく手に入る食べ物の見込みは、満腹度${est}ぶん（明日の空模様の見立てで、畑・釣り・パン焼きから。買う・もらう分は含まない）。`,
+    `手元には${stock}ぶんある。1日に要るのは${DAILY_NEED}。${hoursForADay(r)}。`,
+    'この計画のままでいいか見直し、計画をもう一度JSONで出す。考えがあってこのままでよければ、同じ計画を出してよい。',
+  ].join('\n');
+}
+
+/** 村全体の今日の食べ物の収支 */
+function villageBalance(sim: Simulation): string {
+  const ate = sim.residents.reduce((n, o) => n + satietyOf(o.today.ate), 0);
+  const made = sim.residents.reduce((n, o) => n + satietyOf(o.today.produced), 0);
+  const stock = sim.residents.reduce((n, o) => n + foodValue(o.inventory), 0);
+  return `村全体: 今日みんなで満腹度${ate}ぶん食べ、${made}ぶん作った。村にある食べ物は合わせて${stock}ぶん（${sim.residents.length}人で1日${DAILY_NEED * sim.residents.length}要る）`;
+}
+
+/** 余っている人と困っている人がいる、という村の事実（値段や行動は指示しない） */
+function opportunities(sim: Simulation, r: Resident): string[] {
+  const lines: string[] = [];
+  const others = sim.residents.filter((o) => o !== r);
+  const surplus = ITEM_IDS.filter((id) => ITEMS[id].satiety > 0 && sim.sellable(r, id) > 0).map(
+    (id) => `${ITEMS[id].name}${sim.sellable(r, id)}`,
   );
-  return `${left}。今日新しく手に入れた食べ物は満腹度${gotToday}ぶん（1日に要るのは${DAILY_NEED}）`;
+  const short = others.filter((o) => foodValue(o.inventory) < DAILY_NEED / 2 || o.satiety < 30).map((o) => o.profile.name);
+  if (surplus.length > 0 && short.length > 0) {
+    lines.push(`あなたは自分が食べる分より多く食べ物を持っている（余り: ${surplus.join('・')}）。一方、食べ物が足りていない人がいる: ${short.join('、')}`);
+  }
+  if (foodValue(r.inventory) < DAILY_NEED) {
+    const rich = others
+      .map((o) => ({ o, extra: ITEM_IDS.filter((id) => ITEMS[id].satiety > 0 && sim.sellable(o, id) > 0) }))
+      .filter((x) => x.extra.length > 0)
+      .map((x) => `${x.o.profile.name}（${x.extra.map((id) => `${ITEMS[id].name}${sim.sellable(x.o, id)}`).join('・')}）`);
+    lines.push(rich.length > 0 ? `食べ物を余らせている人: ${rich.join('、')}` : '村には食べ物を余らせている人がいない');
+  }
+  return lines;
 }
 
 function aboutMe(r: Resident): string {
@@ -201,8 +304,14 @@ function aboutMe(r: Resident): string {
     `状態: ${hungerLabel(r.satiety)}（満腹度${Math.round(r.satiety)}）、体力${Math.round(r.health)}、所持金${r.money}G`,
     `持ち物: ${describeInventory(r.inventory)}${perishable ? `（${perishable}）` : ''}`,
     `生活の見込み: ${outlook(r)}`,
+    `働きの目安: ${hoursForADay(r)}`,
     `腕前（0〜100。上がるほど多く・うまく作れる。使わないと少しずつ落ちる）: ${skills}`,
   ].join('\n');
+}
+
+/** 口癖を探す材料：最近の記憶と今日の目標 */
+export function recentTexts(r: Resident): string[] {
+  return [...r.memories.slice(-RECENT_MEMORIES).map((m) => m.text), ...(r.plan?.source === 'ai' ? [r.plan.goal] : [])];
 }
 
 // ───────────── 翌日の計画 ─────────────
@@ -257,6 +366,7 @@ export function buildPlanMessages(sim: Simulation, r: Resident, day: number): Ch
     '',
     '最近の記憶:',
     ...(memories.length > 0 ? memories : ['- 特になし']),
+    ...[topicNotice(recentTexts(r))].filter(Boolean),
     '',
     '貸し借り・雇用:',
     ...(ties(sim, r).map((t) => `- ${t}`).concat(ties(sim, r).length === 0 ? ['- なし'] : [])),
@@ -266,12 +376,16 @@ export function buildPlanMessages(sim: Simulation, r: Resident, day: number): Ch
     '',
     '今日の市場（広場）:',
     marketReport(sim),
+    `- ${villageBalance(sim)}`,
+    ...opportunities(sim, r).map((l) => `- ${l}`),
     '',
     '今日の設備の利用:',
     facilityReport(sim),
     '',
     '村の最近の出来事:',
     ...(news.length > 0 ? news : ['- 特になし']),
+    '',
+    `天気: ${sim.describeWeather('tomorrow')}`,
     '',
     `食べ物: ${food}。小麦はそのままでは食べられない。`,
     '',
@@ -362,6 +476,7 @@ export function parsePlan(raw: RawPlan, day: number, current: Resident, sim: Sim
   }
   if (fixed.length === 0) return null;
   if (cursor < SLEEP_FROM) fixed.push({ from: cursor, to: SLEEP_FROM, action: 'rest' });
+  const feasible = makeFeasible(fixed, current, sim);
 
   const occupation = clean(raw.occupation, 12).replace(/^(なし|無職|特になし)$/, '');
   // 「出る」とはっきり選んだときだけ村を出る（理由の欄だけ埋まっていても出ない）
@@ -372,7 +487,7 @@ export function parsePlan(raw: RawPlan, day: number, current: Resident, sim: Sim
     day,
     goal: goal && !hasForeignWords(goal) ? goal : '今日を生き延びる',
     thought: thought && !hasForeignWords(thought) ? thought : undefined,
-    blocks: fixed,
+    blocks: feasible,
     source: 'ai',
     occupation: hasForeignWords(occupation) ? current.occupation : occupation,
     leave: leave && !hasForeignWords(leave) ? leave : undefined,
@@ -380,6 +495,52 @@ export function parsePlan(raw: RawPlan, day: number, current: Resident, sim: Sim
 }
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
+
+/**
+ * 計画のうち、その時点では成り立たない行動を、それに要るものを手に入れる行動に置き換える。
+ * 小麦がないのにパンは焼けないので畑へ、雇われていないのに雇われ仕事はできないので自分の仕事へ、など。
+ * 人に会う・休むといった本人の選択には手をつけない。
+ */
+function makeFeasible(blocks: PlanBlock[], r: Resident, sim: Simulation): PlanBlock[] {
+  const f = (s: keyof typeof SKILLS) => skillFactor(r.skills[s]);
+  // 得意なほう（同じなら畑）
+  const own: ActionId = r.skills.fish > r.skills.farm ? 'fish' : 'farm';
+  const stock = { wheat: countItem(r.inventory, 'wheat'), vegetable: countItem(r.inventory, 'vegetable'), fish: countItem(r.inventory, 'fish') };
+  const sellable = ITEM_IDS.some((id) => sim.sellable(r, id) > 0);
+  let produced = false;
+  const employed = !!sim.employmentOf(r);
+  return blocks.map((b) => {
+    const h = b.to - b.from;
+    let action = b.action;
+    if (action === 'work_for' && !employed) action = own;
+    if (action === 'bake' && stock.wheat < WHEAT_PER_BAKE) action = 'farm';
+    if (action === 'cook' && (stock.vegetable < (COOK_INPUT.vegetable ?? 2) || stock.fish < (COOK_INPUT.fish ?? 1))) {
+      action = stock.vegetable < (COOK_INPUT.vegetable ?? 2) ? 'farm' : 'fish';
+    }
+    if (action === 'sell' && !sellable && !produced) action = own;
+    // 手元の材料の見込みを進める
+    if (action === 'farm') {
+      stock.wheat += FARM_PER_HOUR.wheat * f('farm') * h;
+      stock.vegetable += FARM_PER_HOUR.vegetable * f('farm') * h;
+      produced = true;
+    } else if (action === 'fish') {
+      stock.fish += FISH_PER_HOUR * f('fish') * h;
+      produced = true;
+    } else if (action === 'bake') {
+      stock.wheat = Math.max(0, stock.wheat - Math.floor((h * 60) / CRAFT_MINUTES) * WHEAT_PER_BAKE);
+    } else if (action === 'cook') {
+      const n = Math.floor((h * 60) / CRAFT_MINUTES);
+      stock.vegetable = Math.max(0, stock.vegetable - n * (COOK_INPUT.vegetable ?? 2));
+      stock.fish = Math.max(0, stock.fish - n * (COOK_INPUT.fish ?? 1));
+    } else if (action === 'buy') {
+      // 買えるかどうかは分からないが、材料を買うつもりなら焼けるものとみなす
+      stock.wheat += 1;
+    }
+    if (action === b.action) return b;
+    const { prices: _p, target: _t, purpose: _u, ...rest } = b;
+    return { ...rest, action };
+  });
+}
 
 // ───────────── 自己像 ─────────────
 
@@ -449,30 +610,43 @@ export interface RawCrisis {
 const CRISIS_ACTIONS = ['visit', 'beg', 'buy', 'farm', 'fish', 'bake', 'rest'] as const;
 
 const CRISIS_SYSTEM = `あなたは小さな村に暮らす村人本人です。いま空腹で、食べる物を何も持っていません。このままだと体力が減り、やがて死にます。
-これからの1〜2時間、どうするかを1つ選びます。
-- visit: 誰かに会いに行く（食べ物を分けてもらう、買う、借りる、頼む、など。target に名前、purpose に用件）
+これからの1〜2時間で、どうやって食べ物を手に入れるかを1つ選びます。ほかの用事は、食べ物を手に入れてからにする。
+- visit: 食べ物を持っている人に会いに行く（分けてもらう、買う、借りる、働いて返す、など。target に名前、purpose に頼みたいこと）
 - beg: 広場で施しを求める
-- buy: 市場で買う（売っている人がいれば）
+- buy: 市場で買う（店を開いている人がいるときだけ意味がある）
 - farm / fish: 自分で採りに行く（すぐには食べられる量にならないかもしれない）
 - bake: 持っている小麦でパンを焼く
-- rest: 何もしない
-自分の自己像・人間関係・所持金・記憶から、自分らしく選ぶ。プライドを捨てて頼ってもいいし、誰にも頼りたくなければそうしてもいい。
+- rest: 何もしない（あきらめる）
+自分の自己像・人間関係・所持金・記憶から、自分らしく選ぶ。プライドを捨てて頼ってもいいし、嫌いな人には頼らなくてもいい。
 thought に本音を一人称で60文字以内で書く。日本語で書く。出力はJSONのみ。`;
+
+/** 食べ物を持っている人と、その中身（食べる分も含めて見える範囲で） */
+function foodHolders(sim: Simulation, r: Resident): Resident[] {
+  return sim.residents.filter((o) => o !== r && foodValue(o.inventory) > 0);
+}
 
 export function buildCrisisMessages(sim: Simulation, r: Resident): ChatMessage[] {
   const sellers = sim.residents
     .filter((o) => o !== r && o.shop)
     .map((o) => o.profile.name);
+  const holders = foodHolders(sim, r).map((o) => {
+    const rel = r.relations[o.profile.id];
+    const foods = ITEM_IDS.filter((id) => ITEMS[id].satiety > 0 && countItem(o.inventory, id) > 0)
+      .map((id) => `${ITEMS[id].name}${countItem(o.inventory, id)}`)
+      .join('・');
+    return `- ${o.profile.name}: ${foods}${rel ? `（あなたの気持ち: ${affinityLabel(rel.affinity)}）` : ''}`;
+  });
   const user = [
     aboutMe(r),
     '',
     '貸し借り・雇用:',
     ...(ties(sim, r).map((t) => `- ${t}`).concat(ties(sim, r).length === 0 ? ['- なし'] : [])),
     '',
-    '村の人たち:',
-    othersReport(sim, r),
+    '食べ物を持っている人:',
+    ...(holders.length > 0 ? holders : ['- 誰もいない']),
     '',
     `いま市場で店を開いている人: ${sellers.length > 0 ? sellers.join('、') : 'いない'}`,
+    sim.describeWeather('now'),
     '',
     '最近の記憶:',
     ...r.memories.slice(-6).map((m) => `- ${m.day}日目 ${m.time}: ${m.text}`),
@@ -499,12 +673,22 @@ export function parseCrisis(
   r: Resident,
   sim: Simulation,
 ): { action: ActionId; target?: string; purpose?: string; thought: string } {
-  const thought = clean(raw.thought, 80);
+  const thought = hasForeignWords(clean(raw.thought, 80)) ? '' : clean(raw.thought, 80);
   const action = (CRISIS_ACTIONS as readonly string[]).includes(raw.action) ? (raw.action as ActionId) : 'fish';
+  const fallback = (): ActionId => (r.money > 0 && sim.residents.some((o) => o !== r && o.shop) ? 'buy' : 'beg');
   if (action === 'visit') {
-    const t = sim.residents.find((o) => o.profile.name === String(raw.target ?? '').trim() && o !== r);
-    if (t) return { action, target: t.profile.id, purpose: clean(raw.purpose, 40) || '食べ物を分けてほしい', thought };
-    return { action: 'beg', thought };
+    // 食べ物を持っていない人を訪ねても飢えはしのげない
+    const t = foodHolders(sim, r).find((o) => o.profile.name === String(raw.target ?? '').trim());
+    if (!t) return { action: fallback(), thought };
+    const purpose = clean(raw.purpose, 40);
+    return {
+      action,
+      target: t.profile.id,
+      purpose: `食べる物がなくて困っている。${purpose && !hasForeignWords(purpose) ? purpose : '食べ物を分けてほしい'}`,
+      thought,
+    };
   }
-  return { action, thought: hasForeignWords(thought) ? '' : thought };
+  if (action === 'buy' && !sim.residents.some((o) => o !== r && o.shop)) return { action: 'beg', thought };
+  if (action === 'bake' && countItem(r.inventory, 'wheat') < 1) return { action: fallback(), thought };
+  return { action, thought };
 }

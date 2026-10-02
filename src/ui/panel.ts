@@ -6,6 +6,9 @@ import { avatar } from './avatar';
 import { Inspector } from './inspector';
 import { RelationGraph } from './relationGraph';
 import type { LogEntry, Resident, Simulation } from '../world/sim';
+import { CONDITIONS, WEATHER, type WeatherKind } from '../world/weather';
+
+const WEATHER_ICONS: Record<WeatherKind, string> = { clear: '☀', cloudy: '☁', rain: '☂', storm: '⛈' };
 
 const SPEEDS = [
   { label: '⏸', value: 0, title: '一時停止' },
@@ -17,6 +20,7 @@ const MAX_LOG = 200;
 
 export class Panel {
   private readonly clockEl = document.getElementById('clock')!;
+  private readonly weatherEl = document.getElementById('weather')!;
   private readonly logEl = document.getElementById('log')!;
   private readonly statusEls = new Map<string, HTMLElement>();
   private readonly itemEls = new Map<string, HTMLElement>();
@@ -74,6 +78,11 @@ export class Panel {
 
   refresh(): void {
     this.clockEl.textContent = this.sim.clock.format();
+    const sky = WEATHER[this.sim.weather.kind];
+    const conds = this.sim.conditions.map((c) => CONDITIONS[c.kind].name);
+    const text = [`${WEATHER_ICONS[this.sim.weather.kind]} ${sky.name}`, ...conds].join('・');
+    if (this.weatherEl.textContent !== text) this.weatherEl.textContent = text;
+    this.weatherEl.title = this.sim.describeWeather('now');
     for (const [id, li] of this.itemEls) {
       const r = this.sim.get(id);
       const status = this.statusEls.get(id)!;

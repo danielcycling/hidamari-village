@@ -57,6 +57,12 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.weather {
+  font-size: 13px;
+  color: var(--muted, inherit);
+  white-space: nowrap;
+}
+
 .ai-status {
   display: flex;
   align-items: center;
