@@ -115,7 +115,7 @@ export class Panel {
   }
 
   private refreshAiStatus() {
-    const { status, model } = this.llm;
+    const { status } = this.llm;
     const planning = this.lifePlanner.status();
     const state = status === 'ready' && (this.llm.working || planning) ? 'busy' : status;
     const text = this.sim.holdingDawn
@@ -124,7 +124,7 @@ export class Panel {
         ? `AI: ${planning}`
         : {
             connecting: 'AIに接続中…',
-            ready: `AI: ${model}`,
+            ready: 'AI: 待機中',
             busy: `AI: 会話を考え中…`,
             offline: 'AI未接続（ルールで暮らしています）',
           }[state];

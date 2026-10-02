@@ -44,7 +44,7 @@ export class ConversationDirector {
   async start(requestedModel: string | null): Promise<void> {
     await this.llm.connect(requestedModel);
     setInterval(() => {
-      if (this.llm.status === 'offline') void this.llm.connect(requestedModel);
+      if (this.llm.status === 'offline') void this.llm.connect(this.llm.model ?? requestedModel);
     }, RECONNECT_INTERVAL);
   }
 
@@ -66,8 +66,14 @@ export class ConversationDirector {
       if (!parsed) throw new Error('AIの返事を会話として読み取れなかった');
       this.lastError = null;
       this.sim.setDialogue(conv, parsed.lines, parsed.outcome);
-      // 会話を流しているあいだに、決まったことを別に書き出す（7Bは1回で両方やると取りこぼす）
-      void this.extractAgreements(conv, ctx, raw);
+      // 会話を流しているあいだに、決まったことを別に書き出す（7Bは1回で両方やると取りこぼす）。
+      // ただの世間話なら書き出すことがないので、AIを呼ばずに済ませる
+      if (needsRecorder(conv, raw, this.sim)) void this.extractAgreements(conv, ctx, raw);
+      else {
+        // 演じる側は好感度を甘くつけがちなので、記録係を通さないときは控えめにする
+        for (const ref of parsed.outcome.reflections) ref.affinityDelta = Math.trunc(ref.affinityDelta / 2);
+        this.sim.addAgreements(conv, []);
+      }
     } catch (e) {
       this.lastError = e instanceof Error ? e.message : String(e);
       console.warn('[director]', e);
@@ -146,6 +152,16 @@ function parse(
       reflections,
     },
   };
+}
+
+/** 物・お金・約束・非行の話が出たか（出ていなければ、記録係に書き出してもらうことはない） */
+const DEAL_WORDS = /あげ|もら|分け|譲|売|買|貸|借|返|払|代金|雇|給料|教え|約束|黙|内緒|秘密|盗|奪|殴|殺|見た|聞いた|お金|[0-9０-９]+\s*[G個円]|パン|魚|野菜|小麦|定食/;
+
+function needsRecorder(conv: Conversation, raw: RawConversation, sim: Simulation): boolean {
+  if (conv.purpose) return true;
+  if ([conv.a, conv.b].some((r) => sim.deedsBy(r).length > 0 || sim.deedsKnownBy(r).length > 0)) return true;
+  const text = [...(raw.lines ?? []).map((l) => l.text), raw.summary].join(' ');
+  return DEAL_WORDS.test(text);
 }
 
 /** 書き出された取り決めを検証する（同じものが重ねて出たら1つにまとめる） */

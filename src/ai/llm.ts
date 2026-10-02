@@ -5,6 +5,15 @@ export interface ChatMessage {
 
 export type LlmStatus = 'connecting' | 'ready' | 'offline';
 
+/** 手元にあるモデル */
+export interface ModelInfo {
+  name: string;
+  /** ディスク上の大きさ（GB） */
+  sizeGB: number;
+  /** 考えてから答える（推論）モデルか */
+  reasoning: boolean;
+}
+
 /** 会話向きで、手元にあれば優先して使うモデル（上ほど優先） */
 const PREFERRED_MODELS = [
   'qwen2.5:7b-instruct',
@@ -27,6 +36,10 @@ const RECONNECT_DELAY_MS = 5_000;
 export class OllamaClient {
   status: LlmStatus = 'connecting';
   model: string | null = null;
+  /** 手元にあるモデル（埋め込み用は除く） */
+  models: ModelInfo[] = [];
+  /** 今のモデルが「考える」機能を持つか（持つなら think: false で考える過程を省く） */
+  private thinking = false;
   /**
    * 同時に投げてよいリクエスト数。Ollama 0.32 は1件ずつ処理する（-np 1）ので、
    * 多く投げても順番待ちが伸びるだけ。待ちきれずに打ち切ったリクエストが溜まると Ollama が固まることがあるので、
@@ -44,18 +57,40 @@ export class OllamaClient {
     try {
       const res = await fetch(`${this.baseUrl}/api/tags`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { models: { name: string }[] };
-      const names = data.models.map((m) => m.name);
-      this.model =
+      const data = (await res.json()) as { models: { name: string; size: number }[] };
+      this.models = data.models
+        .filter((m) => !isEmbeddingModel(m.name))
+        .map((m) => ({ name: m.name, sizeGB: Math.round((m.size / 1e9) * 10) / 10, reasoning: isReasoningModel(m.name) }))
+        .sort((a, b) => Number(a.reasoning) - Number(b.reasoning) || a.sizeGB - b.sizeGB);
+      const names = this.models.map((m) => m.name);
+      const model =
         (requested && names.find((n) => n === requested)) ||
         PREFERRED_MODELS.find((p) => names.includes(p)) ||
-        names.find((n) => !isReasoningModel(n) && !isEmbeddingModel(n)) ||
+        this.models.find((m) => !m.reasoning)?.name ||
         null;
+      if (model) await this.useModel(model);
       this.status = this.model ? 'ready' : 'offline';
-      if (this.model) void this.warmUp();
     } catch {
       this.status = 'offline';
     }
+  }
+
+  /** 使うモデルを切り替える（考える機能の有無を調べ、先にメモリへ載せておく） */
+  async useModel(name: string): Promise<void> {
+    this.model = name;
+    this.thinking = false;
+    try {
+      const res = await fetch(`${this.baseUrl}/api/show`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: name }),
+      });
+      const info = (await res.json()) as { capabilities?: string[] };
+      this.thinking = info.capabilities?.includes('thinking') ?? false;
+    } catch {
+      this.thinking = /qwen3|gpt-oss|r1/i.test(name);
+    }
+    void this.warmUp();
   }
 
   /** これ以上は同時に投げないほうがいい */
@@ -99,7 +134,7 @@ export class OllamaClient {
         stream: false,
         format: schema,
         keep_alive: '30m',
-        ...(this.supportsThinkToggle() ? { think: false } : {}),
+        ...(this.thinking ? { think: false } : {}),
         // Ollama の既定の文脈長（2048）だと長いプロンプトが黙って切られるので広げる
         options: { temperature: 0.9, num_predict: 900, num_ctx: 8192 },
       }),
@@ -118,7 +153,4 @@ export class OllamaClient {
     }).catch(() => undefined);
   }
 
-  private supportsThinkToggle(): boolean {
-    return /qwen3|gpt-oss/i.test(this.model ?? '');
-  }
 }

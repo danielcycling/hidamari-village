@@ -63,6 +63,16 @@ body {
   white-space: nowrap;
 }
 
+.model {
+  max-width: 16em;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  padding: 2px 4px;
+}
+
 .ai-status {
   display: flex;
   align-items: center;

@@ -29,8 +29,8 @@ const ACTION_LABELS: Partial<Record<string, string>> = {
 const MAX_DAWN_WAIT_SECONDS = 240;
 /** 自己像を見つめ直す間隔（日） */
 const SELF_IMAGE_EVERY = 3;
-/** 自己像を見つめ直す時刻（夜の計画づくりと重ならない、昼下がり） */
-const SELF_IMAGE_HOUR = 14;
+/** 同じ人の危機の判断をAIに頼む間隔（分）。そのあいだはルールで動く */
+const CRISIS_INTERVAL = 180;
 
 interface Job {
   kind: 'plan' | 'self' | 'crisis';
@@ -50,17 +50,13 @@ export class LifePlanner {
   private running: Job[] = [];
   private progress = { day: 0, total: 0, done: 0 };
   private dawnWaitStartedAt: number | null = null;
+  private readonly lastCrisis = new Map<string, number>();
 
   constructor(
     private readonly sim: Simulation,
     private readonly llm: OllamaClient,
   ) {
     sim.events.on('evening', ({ day }) => this.onEvening(day));
-    sim.events.on('hourly', ({ day, hour }) => {
-      if (hour === SELF_IMAGE_HOUR && day % SELF_IMAGE_EVERY === 2 && this.llm.status === 'ready') {
-        this.queue.push(...this.sim.residents.map((r): Job => ({ kind: 'self', residentId: r.profile.id, day })));
-      }
-    });
     sim.dawnHold = () => this.shouldHoldDawn();
     // 夜の計画づくりを優先する（そのあいだの出会いはあいさつで済ませる）
     const gate = sim.conversationGate;
@@ -69,6 +65,10 @@ export class LifePlanner {
     sim.crisisHandler = (r) => {
       if (this.llm.status !== 'ready') return false;
       if (this.queue.some((j) => j.kind === 'crisis' && j.residentId === r.profile.id)) return true;
+      // 何度も頼むとAIが会話に回らなくなるので、同じ人は数時間おきに（あいだはルールで動く）
+      const last = this.lastCrisis.get(r.profile.id);
+      if (last !== undefined && sim.clock.minutes - last < CRISIS_INTERVAL) return false;
+      this.lastCrisis.set(r.profile.id, sim.clock.minutes);
       this.queue.unshift({ kind: 'crisis', residentId: r.profile.id, day: sim.clock.day });
       return true;
     };
@@ -94,7 +94,10 @@ export class LifePlanner {
   /** 毎フレーム呼ぶ。LLMに空きがあれば次の仕事を始める（同じ人の仕事は順番に） */
   tick(): void {
     this.dropStale();
-    while (this.llm.status === 'ready' && !this.llm.busy) {
+    // 昼間は1件まで（もう1枠は会話に空けておく）。夜は会話がないので空きを全部使う
+    const h = this.sim.clock.hourOfDay;
+    const daytime = h >= WAKE_AT && h < 21;
+    while (this.llm.status === 'ready' && !this.llm.busy && (!daytime || this.running.length < 1)) {
       const i = this.queue.findIndex(
         (job, idx) =>
           !this.running.some((j) => j.residentId === job.residentId) &&
@@ -120,6 +123,10 @@ export class LifePlanner {
     const planJobs: Job[] = order.map(({ r }) => ({ kind: 'plan', residentId: r.profile.id, day: day + 1 }));
     this.queue.push(...planJobs);
     this.progress = { day: day + 1, total: planJobs.length, done: 0 };
+    // 自己像の見つめ直しは、計画のあと夜のうちに（昼間のAIは会話に回したいので）
+    if (day % SELF_IMAGE_EVERY === 2) {
+      this.queue.push(...this.sim.residents.map((r): Job => ({ kind: 'self', residentId: r.profile.id, day })));
+    }
   }
 
   private async run(job: Job) {

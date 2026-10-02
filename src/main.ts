@@ -3,6 +3,7 @@ import { ConversationDirector } from './ai/director';
 import { AutoGod } from './ai/god';
 import { LifePlanner } from './ai/lifePlanner';
 import { OllamaClient } from './ai/llm';
+import { ModelPicker, savedModel } from './ui/modelPicker';
 import { Renderer } from './render/renderer';
 import { GodPanel } from './ui/godPanel';
 import { Panel } from './ui/panel';
@@ -47,7 +48,8 @@ async function main() {
   const autoGod = new AutoGod(sim, llm);
   if (save?.autoGod) autoGod.setEnabled(true);
   new GodPanel(sim, autoGod);
-  void director.start(params.get('model'));
+  const modelPicker = new ModelPicker(sim, llm);
+  void director.start(params.get('model') ?? savedModel());
 
   canvas.addEventListener('click', (e) => panel.select(renderer.hitTest(e.clientX, e.clientY)));
 
@@ -89,6 +91,7 @@ async function main() {
     sinceRefresh += dt;
     if (sinceRefresh > 0.2) {
       panel.refresh();
+      modelPicker.refresh();
       sinceRefresh = 0;
     }
     requestAnimationFrame(frame);
