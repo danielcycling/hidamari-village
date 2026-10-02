@@ -116,6 +116,13 @@ const VIOLENCE_WITNESS = 0.9;
 /** やられた人・見た人の、相手への気持ちの下がり方 */
 const VICTIM_GRUDGE: Record<CrimeAction, number> = { steal: 30, rob: 40, attack: 50, kill: 70 };
 const WITNESS_GRUDGE: Record<CrimeAction, number> = { steal: 15, rob: 20, attack: 25, kill: 50 };
+/** 「AがB〇〇」の〇〇（したこととして話すとき） */
+const DEED_DONE: Record<CrimeAction, string> = {
+  steal: 'から物を盗んだ',
+  rob: 'から力ずくで奪った',
+  attack: 'を殴った',
+  kill: 'を殺した',
+};
 /** 「AがB〇〇」の〇〇 */
 const DEED_LABEL: Record<CrimeAction, string> = {
   steal: 'から物を盗む',
@@ -2010,7 +2017,7 @@ export class Simulation {
       if (!fromKnows || d.actorId === to.profile.id || d.knownBy[to.profile.id]) continue;
       d.knownBy[to.profile.id] = 'heard';
       const confessed = d.actorId === from.profile.id;
-      const act = d.kind === 'kill' && d.success ? `${d.victimName}を殺した` : `${d.victimName}${DEED_LABEL[d.kind]}`;
+      const act = `${d.victimName}${DEED_DONE[d.kind]}`;
       const text = confessed ? `${from.profile.name}が、自分が${act}と打ち明けた` : `${from.profile.name}から、${d.actorName}が${act}と聞いた`;
       this.remember(to, text);
       this.log(`${to.profile.name}は${text}`, 'crime', { conversationId: conv.id });
@@ -2141,6 +2148,12 @@ export class Simulation {
         return;
       }
       case 'rule': {
+        // 同じ名前の決まりがすでにあれば、作り直さない
+        const same = this.laws.find((l) => l.title === (p.title || '決まり'));
+        if (same) {
+          this.log(`決まり「${same.title}」はもうあるので、あらためて確かめ合っただけになった`, 'assembly');
+          return;
+        }
         const law: Law = {
           id: ++this.lawSeq,
           title: p.title || '決まり',

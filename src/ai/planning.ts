@@ -207,8 +207,18 @@ function ties(sim: Simulation, r: Resident): string[] {
 export function lawLines(sim: Simulation): string[] {
   const laws = sim.laws.map((l) => `- 「${l.title}」${l.text && l.text !== l.title ? `：${l.text}` : ''}（${l.enactedDay}日目に決まった）`);
   const pending = sim.assemblies.find((a) => a.status === 'scheduled');
+  // 最近の集会で何が話し合われ、どうなったか（同じ話を繰り返しているかどうか分かるように）
+  const recent = sim.assemblies
+    .filter((a) => a.status === 'done')
+    .slice(-3)
+    .map((a) => {
+      const r = a.result;
+      const how = !r ? '話はまとまらなかった' : r.proposal.kind === 'none' ? '採決はしなかった' : r.passed ? '可決した' : '否決された';
+      return `- ${a.day}日目の集会（議題：「${a.agenda}」、呼びかけ：${a.callerName}）：${how}`;
+    });
   return [
     ...(laws.length ? laws : ['- まだ何もない']),
+    ...(recent.length ? ['最近の集会:', ...recent] : []),
     ...(pending ? [`- ${pending.day}日目の夕方、${pending.callerName}が呼びかけた集会がある（議題：「${pending.agenda}」）`] : []),
   ];
 }
