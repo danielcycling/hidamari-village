@@ -89,7 +89,9 @@ export class ConversationDirector {
         disclosures?: { deed: number; from: string; to: string }[];
         feelings?: Record<string, { change?: number; reason?: string }>;
       }>(buildAgreementMessages(ctx, lines, clean(raw.summary, 80)), buildAgreementSchema(ctx));
-      this.sim.addAgreements(conv, parseAgreements(conv, res.agreements ?? [], lines.map((l) => l.text)));
+      // 根拠は、セリフのほか、まとめの文でもよい
+      const spoken = [...lines.map((l) => l.text), clean(raw.summary, 80)];
+      this.sim.addAgreements(conv, parseAgreements(conv, res.agreements ?? [], spoken));
       const byName = new Map([conv.a, conv.b].map((r) => [r.profile.name, r.profile.id]));
       // 相手への気持ちは、会話を演じたAIではなく記録係が判定する（演じる側は仲良くまとめがちなので）
       this.sim.addFeelings(

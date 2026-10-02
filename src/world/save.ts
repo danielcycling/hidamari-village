@@ -6,7 +6,9 @@ import {
   emptyDayStats,
   type DayRecord,
   type DayStats,
+  type Assembly,
   type Debt,
+  type Law,
   type Deed,
   type Delivery,
   type Employment,
@@ -17,6 +19,7 @@ import {
   type MarketDay,
   type Memory,
   type PendingDiscovery,
+  type Resident,
   type News,
   type Simulation,
   type WeatherKind,
@@ -49,6 +52,8 @@ interface SavedResident {
   nextPlan: DailyPlan | null;
   selfImageHistory: { day: number; text: string }[];
   leaving: string | null;
+  temptation?: { text: string; until: number };
+  seen?: Resident['seen'];
 }
 
 export interface SaveData {
@@ -65,6 +70,10 @@ export interface SaveData {
   deliveries?: Delivery[];
   dealSeq?: number;
   deeds?: Deed[];
+  assemblies?: Assembly[];
+  laws?: Law[];
+  assemblySeq?: number;
+  lawSeq?: number;
   deedSeq?: number;
   pendingDiscoveries?: PendingDiscovery[];
   news: News[];
@@ -109,6 +118,8 @@ export function serialize(sim: Simulation, autoGod: boolean): SaveData {
       nextPlan: r.nextPlan,
       selfImageHistory: r.selfImageHistory,
       leaving: r.leaving,
+      temptation: r.temptation,
+      seen: r.seen,
     })),
     graves: sim.graves,
     estates: sim.estates,
@@ -118,6 +129,10 @@ export function serialize(sim: Simulation, autoGod: boolean): SaveData {
     deliveries: sim.deliveries,
     dealSeq: sim.dealSeq,
     deeds: sim.deeds,
+    assemblies: sim.assemblies,
+    laws: sim.laws,
+    assemblySeq: sim.assemblySeq,
+    lawSeq: sim.lawSeq,
     deedSeq: sim.deedSeq,
     pendingDiscoveries: sim.pendingDiscoveries,
     news: sim.news,
@@ -179,6 +194,8 @@ export function restore(sim: Simulation, data: SaveData): void {
       nextPlan: saved.nextPlan ?? null,
       selfImageHistory: saved.selfImageHistory ?? [],
       leaving: saved.leaving ?? null,
+      temptation: saved.temptation,
+      seen: saved.seen,
     });
   }
   replace(sim.graves, data.graves);
@@ -190,6 +207,14 @@ export function restore(sim: Simulation, data: SaveData): void {
   replace(sim.deliveries, data.deliveries ?? []);
   sim.dealSeq = data.dealSeq ?? 0;
   replace(sim.deeds, data.deeds ?? []);
+  // 話し合いの途中で閉じた集会は、話がまとまらなかったことにする
+  replace(
+    sim.assemblies,
+    (data.assemblies ?? []).map((a) => (a.status === 'deliberating' ? { ...a, status: 'done' as const } : a)),
+  );
+  replace(sim.laws, data.laws ?? []);
+  sim.assemblySeq = data.assemblySeq ?? 0;
+  sim.lawSeq = data.lawSeq ?? 0;
   sim.deedSeq = data.deedSeq ?? 0;
   replace(sim.pendingDiscoveries, data.pendingDiscoveries ?? []);
   replace(sim.news, data.news);

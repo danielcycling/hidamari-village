@@ -118,7 +118,10 @@ export class Panel {
     const { status } = this.llm;
     const planning = this.lifePlanner.status();
     const state = status === 'ready' && (this.llm.working || planning) ? 'busy' : status;
-    const text = this.sim.holdingDawn
+    const assembly = this.sim.assemblies.find((a) => a.status === 'deliberating');
+    const text = assembly && status === 'ready'
+      ? `AI: 集会で話し合っている（${assembly.agenda}）`
+      : this.sim.holdingDawn
       ? `夜明け前：みんなの計画を待っています（${planning ?? ''}）`
       : planning && status === 'ready'
         ? `AI: ${planning}`

@@ -953,3 +953,8 @@ body {
   color: var(--muted);
   font-size: 11px;
 }
+
+/* ───────────── 村の集会 ───────────── */
+.log-assembly span {
+  color: #8ad0ff;
+}

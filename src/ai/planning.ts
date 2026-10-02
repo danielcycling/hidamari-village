@@ -75,6 +75,7 @@ function actionCatalog(sim: Simulation, r: Resident): string {
     attack: '相手を殴って体力を大きく減らす。target に相手の名前。体力が0になった人は死ぬ。相手には必ず知られる',
     kill: '相手を殺す。target に相手の名前。自分の体力が相手より多いほど、相手が弱っているほど成功しやすい。失敗すると相手は傷を負って逃げる',
     accuse: '広場で、ある人のことを村のみんなに言いふらす（本当のことでも嘘でもよい）。target に相手の名前、purpose に言いふらす中身',
+    call_assembly: `村のみんなに呼びかけ、その日の夕方に集会所で集会を開く。purpose に議題（例：誰かを村から追放する、誰かに罰金を科す、村の決まりを作る・やめる、村のことを話し合う）、相手がいれば target。結論は出席者の多数決で決まり、決まったことは実行される${sim.assemblies.some((a) => a.status !== 'done') ? '（今は別の集会が予定されている）' : ''}`,
   };
   return PLAN_ACTIONS.map((a) => {
     const place = ACTIONS[a].place === 'home' ? '自分の家' : ACTIONS[a].place;
@@ -200,6 +201,22 @@ function ties(sim: Simulation, r: Resident): string[] {
     }
   }
   return lines;
+}
+
+/** 村の決まりと、予定されている集会 */
+export function lawLines(sim: Simulation): string[] {
+  const laws = sim.laws.map((l) => `- 「${l.title}」${l.text && l.text !== l.title ? `：${l.text}` : ''}（${l.enactedDay}日目に決まった）`);
+  const pending = sim.assemblies.find((a) => a.status === 'scheduled');
+  return [
+    ...(laws.length ? laws : ['- まだ何もない']),
+    ...(pending ? [`- ${pending.day}日目の夕方、${pending.callerName}が呼びかけた集会がある（議題：「${pending.agenda}」）`] : []),
+  ];
+}
+
+/** 心の奥でくすぶっている声（悪魔のささやき）。本人には自分の考えとして浮かぶ */
+function innerVoice(sim: Simulation, r: Resident): string[] {
+  const t = sim.temptationOf(r);
+  return t ? ['', `心の奥でくすぶっている考え: 「${t}」`] : [];
 }
 
 /** 自分がしたこと（隠していること）と、人のしたことで知っていること */
@@ -387,6 +404,7 @@ const PLAN_SYSTEM = `あなたは小さな村に暮らす村人本人です。�
 - 行動は一覧から選ぶ。時間割は${WAKE_AT}〜${SLEEP_FROM}時の範囲で、重ならないように4〜8個のまとまりで並べる。
 - 材料が要る行動（パン焼き・料理）は、材料を手に入れる行動のあとに置く。売る物がないのに sell を入れない。
 - prices は sell のときだけ書く。visit のときは target に相手の名前、purpose に用件を書く。steal・rob・attack・kill は target に相手の名前、accuse は target と purpose を書く。
+- 村のことを決めたいときは、集会を呼びかけられる（call_assembly）。決まったことは村の決まりとして守られることが期待される。
 - 人の物を盗む・奪う・傷つけることもできる。それをするかどうか、どう考えるかは自分しだい。したことは誰かに見られているかもしれない。
 - 自分の自己像・状態・腕前・記憶・村の人たち・市場の様子をよく見て、自分にとっていちばんいいと思う計画を立てる。他の人の役に立つことを考えてもいいし、自分のことだけを考えてもいい。
 - 本音は取り繕わずに書く。不安・不満・嫉妬・恨みがあればそのまま書いてよい。
@@ -409,6 +427,7 @@ export function buildPlanMessages(sim: Simulation, r: Resident, day: number): Ch
     '最近の記憶:',
     ...(memories.length > 0 ? memories : ['- 特になし']),
     ...[topicNotice(recentTexts(r))].filter(Boolean),
+    ...innerVoice(sim, r),
     '',
     '貸し借り・雇用:',
     ...(ties(sim, r).map((t) => `- ${t}`).concat(ties(sim, r).length === 0 ? ['- なし'] : [])),
@@ -416,6 +435,9 @@ export function buildPlanMessages(sim: Simulation, r: Resident, day: number): Ch
     '',
     '村の人たち:',
     othersReport(sim, r),
+    '',
+    '村の決まり（集会で決めたこと）:',
+    ...lawLines(sim),
     '',
     '今日の市場（広場）:',
     marketReport(sim),
@@ -488,11 +510,13 @@ export function parsePlan(raw: RawPlan, day: number, current: Resident, sim: Sim
     .filter((b) => PLAN_ACTIONS.includes(b.action as ActionId))
     .map((b) => {
       // 相手の要る行動で、相手が村にいなければ、ぶらつくことにする
-      const targeted = TARGETED_ACTIONS.includes(b.action as ActionId) || b.action === 'accuse';
+      const targeted = TARGETED_ACTIONS.includes(b.action as ActionId) || b.action === 'accuse' || b.action === 'call_assembly';
       const target = targeted ? byName.get(String(b.target ?? '').trim()) : undefined;
       const purpose = clean(b.purpose, 60);
       const missing =
-        b.action === 'accuse' ? !purpose || hasForeignWords(purpose) : targeted && (!target || target === current.profile.id);
+        b.action === 'accuse' || b.action === 'call_assembly'
+          ? !purpose || hasForeignWords(purpose)
+          : targeted && (!target || target === current.profile.id);
       const action = (missing ? 'wander' : b.action) as ActionId;
       const prices: Partial<Record<ItemId, number>> = {};
       for (const id of ITEM_IDS) {
@@ -504,7 +528,7 @@ export function parsePlan(raw: RawPlan, day: number, current: Resident, sim: Sim
         to: clamp(Number(b.to), WAKE_AT, SLEEP_FROM),
         action,
         ...(Object.keys(prices).length > 0 ? { prices } : {}),
-        ...(TARGETED_ACTIONS.includes(action) || action === 'accuse'
+        ...(TARGETED_ACTIONS.includes(action) || action === 'accuse' || action === 'call_assembly'
           ? { target: target === current.profile.id ? undefined : target, purpose: hasForeignWords(purpose) ? '' : purpose }
           : {}),
       };
@@ -697,6 +721,7 @@ export function buildCrisisMessages(sim: Simulation, r: Resident): ChatMessage[]
   const user = [
     aboutMe(r),
     `残された時間: ${timeLeft(r)}`,
+    ...innerVoice(sim, r),
     '',
     '貸し借り・雇用:',
     ...(ties(sim, r).map((t) => `- ${t}`).concat(ties(sim, r).length === 0 ? ['- なし'] : [])),

@@ -104,13 +104,13 @@ export class OllamaClient {
   }
 
   /** JSONスキーマに沿った出力を1回で受け取る */
-  async chatJSON<T>(messages: ChatMessage[], schema: object, signal?: AbortSignal): Promise<T> {
+  async chatJSON<T>(messages: ChatMessage[], schema: object, signal?: AbortSignal, maxTokens = 900): Promise<T> {
     if (!this.model) throw new Error('model not selected');
     this.inFlight++;
     // 返事が来ないまま枠を占有し続けないよう、時間を切る（混んでいて待たされる分も含む）
     const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
     try {
-      return await this.request<T>(messages, schema, signal ? AbortSignal.any([signal, timeout]) : timeout);
+      return await this.request<T>(messages, schema, signal ? AbortSignal.any([signal, timeout]) : timeout, maxTokens);
     } catch (e) {
       // fetch 自体が失敗した：いったん offline にして、少し待ってつなぎ直す
       if (e instanceof TypeError && this.status === 'ready') {
@@ -123,7 +123,7 @@ export class OllamaClient {
     }
   }
 
-  private async request<T>(messages: ChatMessage[], schema: object, signal?: AbortSignal): Promise<T> {
+  private async request<T>(messages: ChatMessage[], schema: object, signal: AbortSignal, maxTokens: number): Promise<T> {
     const res = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -136,7 +136,7 @@ export class OllamaClient {
         keep_alive: '30m',
         ...(this.thinking ? { think: false } : {}),
         // Ollama の既定の文脈長（2048）だと長いプロンプトが黙って切られるので広げる
-        options: { temperature: 0.9, num_predict: 900, num_ctx: 8192 },
+        options: { temperature: 0.9, num_predict: maxTokens, num_ctx: 8192 },
       }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);

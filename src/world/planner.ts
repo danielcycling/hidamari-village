@@ -26,7 +26,8 @@ export type ActionId =
   | 'rob'
   | 'attack'
   | 'kill'
-  | 'accuse';
+  | 'accuse'
+  | 'call_assembly';
 
 /** 相手のいるところへ行ってする行動（target が要る） */
 export const TARGETED_ACTIONS: ActionId[] = ['visit', 'steal', 'rob', 'attack', 'kill'];
@@ -67,6 +68,8 @@ export const ACTIONS: Record<ActionId, ActionDef> = {
   kill: { label: '殺す', place: 'plaza' },
   // 広場で、誰かのことをみんなに言う
   accuse: { label: '言いふらす', place: 'plaza' },
+  // 広場で呼びかけ、夕方に集会所で村の集会を開く
+  call_assembly: { label: '集会を呼びかける', place: 'plaza' },
 };
 
 export interface PlanBlock {

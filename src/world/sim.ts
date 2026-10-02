@@ -97,6 +97,13 @@ const BUY_INTERVAL = 15;
 export const PLANNING_HOUR = 21;
 /** 新入村民が来るかどうかを判定する時刻（時） */
 const IMMIGRATION_HOUR = 10;
+/** 村の集会の時間（集会所） */
+const ASSEMBLY_FROM = 18;
+const ASSEMBLY_TO = 19.5;
+/** 話し合いがまとまらないまま、これ以上は待たない（分） */
+const ASSEMBLY_GIVE_UP = 240;
+/** 悪魔のささやきが心に残る時間（分） */
+const TEMPTATION_MINUTES = 2 * 1440;
 /** 飢えて頼んだのに断られたときの、相手への気持ちの下がり方 */
 const REFUSAL_GRUDGE = 8;
 /** 盗み・暴力を見ていられる距離（マス） */
@@ -218,6 +225,8 @@ export interface Resident {
   visited?: { targetId: string; until: number };
   /** 危機の判断をLLMに頼んだ時刻 */
   crisisRequestedAt?: number;
+  /** 悪魔のささやき（心の奥の声）と、それが消える時刻 */
+  temptation?: { text: string; until: number };
   /** 最後に会ったときに見た、相手の様子と持っていた食べ物（人の持ち物は、見たことしか分からない） */
   seen?: Record<string, Sighting>;
   /** 施しを求め始めた時刻と、そのときの食べ物（もらえたかどうかを後で確かめる） */
@@ -421,7 +430,8 @@ export interface LogEntry {
     | 'day'
     | 'plan'
     | 'deal'
-    | 'crime';
+    | 'crime'
+    | 'assembly';
   speakerId?: string;
   /** 同じ会話のログをまとめて表示するための番号 */
   conversationId?: number;
@@ -440,6 +450,8 @@ export type SimEvents = {
   /** 毎時0分 */
   hourly: { day: number; hour: number };
   residentLeft: { name: string };
+  /** 村の集会が始まった（AIに話し合いを考えてもらう） */
+  assemblyStart: Assembly;
 };
 
 /** 村人みんなが知っている出来事 */
@@ -459,6 +471,53 @@ export interface Gathering {
   to: number;
   placeId: string;
   activity: string;
+  /** 村の集会なら、その番号 */
+  assemblyId?: number;
+}
+
+/** 村の集会。誰かが呼びかけ、夕方に集会所で開かれる */
+export interface Assembly {
+  id: number;
+  callerId: string;
+  callerName: string;
+  agenda: string;
+  /** 議題の相手（追放・罰の対象など） */
+  targetId?: string;
+  targetName?: string;
+  day: number;
+  from: number;
+  status: 'scheduled' | 'deliberating' | 'done';
+  result?: AssemblyResult;
+}
+
+export type ProposalKind = 'exile' | 'fine' | 'rule' | 'repeal' | 'none';
+
+export interface AssemblyResult {
+  speeches: { speakerId: string; text: string }[];
+  proposal: {
+    kind: ProposalKind;
+    /** 追放・罰金の相手 */
+    targetId?: string;
+    /** 罰金の額と、受け取る人（いなければ村のみんなで分ける） */
+    amount?: number;
+    beneficiaryId?: string;
+    /** 決まりの名前と中身、廃止する決まりの番号 */
+    title?: string;
+    text?: string;
+    lawId?: number;
+  };
+  votes: { voterId: string; yes: boolean; reason: string }[];
+  passed: boolean;
+  summary: string;
+}
+
+/** 村の決まり（集会で決めたもの） */
+export interface Law {
+  id: number;
+  title: string;
+  text: string;
+  enactedDay: number;
+  assemblyId: number;
 }
 
 interface Task {
@@ -522,6 +581,12 @@ export class Simulation {
   readonly employments: Employment[] = [];
   readonly deliveries: Delivery[] = [];
   dealSeq = 0;
+  /** 村の集会（予定・済み） */
+  readonly assemblies: Assembly[] = [];
+  /** 村の決まり */
+  readonly laws: Law[] = [];
+  assemblySeq = 0;
+  lawSeq = 0;
   /** 非行と暴力の記録（神の視点ではすべて見える） */
   readonly deeds: Deed[] = [];
   readonly pendingDiscoveries: PendingDiscovery[] = [];
@@ -607,7 +672,10 @@ export class Simulation {
   }
 
   get isSlowedForConversation(): boolean {
-    return this.clock.speed > 1 && this.conversations.some((c) => c.kind === 'ai');
+    return (
+      this.clock.speed > 1 &&
+      (this.conversations.some((c) => c.kind === 'ai') || this.assemblies.some((a) => a.status === 'deliberating'))
+    );
   }
 
   /** AIが考えた会話を流し始める */
@@ -751,6 +819,21 @@ export class Simulation {
   whisper(r: Resident, text: string): void {
     this.remember(r, `天の声がささやいた「${text}」`);
     this.log(`${r.profile.name}に天の声がささやいた「${text}」`, 'god');
+  }
+
+  /**
+   * 悪魔のささやき：本人には自分の心の声として聞こえる。
+   * 2日のあいだ、計画・危機の判断・会話のときに思い浮かぶ（従うかどうかは本人しだい）
+   */
+  tempt(r: Resident, text: string): void {
+    r.temptation = { text, until: this.clock.minutes + TEMPTATION_MINUTES };
+    this.remember(r, `ふと、心の奥で声がした「${text}」`);
+    this.log(`${r.profile.name}の心に悪魔がささやいた「${text}」`, 'god');
+  }
+
+  /** 今もくすぶっている心の声（なければ null） */
+  temptationOf(r: Resident): string | null {
+    return r.temptation && this.clock.minutes < r.temptation.until ? r.temptation.text : null;
   }
 
   /** どこからか聞いた噂として吹き込む */
@@ -906,6 +989,7 @@ export class Simulation {
     this.events.emit('hourly', { day: this.clock.day, hour: hour % 24 });
     this.settleDeliveries();
     this.discoverThefts();
+    this.advanceAssemblies();
     this.updateWeather();
     for (const r of this.residents) {
       const spoiled = removeSpoiled(r.inventory, this.clock.minutes);
@@ -1322,10 +1406,10 @@ export class Simulation {
       }
       action = 'wander';
     }
-    if (action === 'accuse') {
-      const done = r.visited && r.visited.targetId === 'accuse' && now < r.visited.until;
+    if (action === 'accuse' || action === 'call_assembly') {
+      const done = r.visited && r.visited.targetId === action && now < r.visited.until;
       if (!purpose || done) action = 'wander';
-      else return { placeId: 'plaza', action, label: '広場で話して回る', block, target, purpose };
+      else return { placeId: 'plaza', action, label: action === 'accuse' ? '広場で話して回る' : '集会を呼びかけて回る', block, target, purpose };
     }
     if (action === 'work_for') {
       const emp = this.employmentOf(r);
@@ -1376,6 +1460,9 @@ export class Simulation {
         break;
       case 'accuse':
         this.accuse(r, task);
+        break;
+      case 'call_assembly':
+        this.callAssembly(r, task);
         break;
       case 'sell':
         if (!r.shop) this.openShop(r, task.block);
@@ -1942,10 +2029,161 @@ export class Simulation {
     return this.deeds.filter((d) => d.actorId === r.profile.id);
   }
 
+  // ───────────── 村の集会 ─────────────
+
+  /** 広場で集会を呼びかける。夕方（間に合わなければ翌日）に集会所で開く */
+  private callAssembly(r: Resident, task: Task) {
+    if (!task.purpose) return;
+    r.visited = { targetId: 'call_assembly', until: this.taskEnd(r, task) };
+    const pending = this.assemblies.find((a) => a.status !== 'done');
+    if (pending) {
+      this.remember(r, `集会を呼びかけようとしたが、もう${pending.callerName}の呼びかけた集会（「${pending.agenda}」）が予定されていた`);
+      return;
+    }
+    const g = this.holdGathering('hall', ASSEMBLY_FROM, ASSEMBLY_TO, '村の集会');
+    const target = task.target ? this.get(task.target) : undefined;
+    const assembly: Assembly = {
+      id: ++this.assemblySeq,
+      callerId: r.profile.id,
+      callerName: r.profile.name,
+      agenda: task.purpose,
+      targetId: target?.profile.id,
+      targetName: target?.profile.name,
+      day: Math.floor(g.from / 1440) + 1,
+      from: g.from,
+      status: 'scheduled',
+    };
+    g.assemblyId = assembly.id;
+    this.assemblies.push(assembly);
+    const when = assembly.day === this.clock.day ? '今日' : '明日';
+    this.announce(`${r.profile.name}が「${assembly.agenda}」について話し合うため、${when}の${ASSEMBLY_FROM}時から集会所で村の集会を開くと呼びかけた`, 'life');
+  }
+
+  /** 集会の時間になったら話し合いを始め、終わりの時間までに結論が出なければ少し延ばす */
+  private advanceAssemblies() {
+    const now = this.clock.minutes;
+    for (const a of this.assemblies) {
+      if (a.status === 'scheduled' && now >= a.from) {
+        a.status = 'deliberating';
+        this.log(`村の集会が始まった（議題：「${a.agenda}」、呼びかけ：${a.callerName}）`, 'assembly');
+        this.events.emit('assemblyStart', a);
+      }
+      if (a.status !== 'deliberating') continue;
+      const g = this.gatherings.find((g) => g.assemblyId === a.id);
+      if (!g) continue;
+      if (now >= a.from + ASSEMBLY_GIVE_UP) {
+        this.concludeAssembly(a, null);
+      } else if (g.to - now <= 60) {
+        // 話し合いが続いているあいだは解散しない
+        g.to = now + 60;
+      }
+    }
+  }
+
+  /** 集会の結論を受け取り、決まったことを実行する（null なら話がまとまらなかった） */
+  concludeAssembly(a: Assembly, result: AssemblyResult | null): void {
+    if (a.status === 'done') return;
+    a.status = 'done';
+    const g = this.gatherings.find((g) => g.assemblyId === a.id);
+    if (g) g.to = Math.min(g.to, this.clock.minutes + 10);
+    if (!result) {
+      this.log(`集会は話がまとまらないまま終わった（「${a.agenda}」）`, 'assembly');
+      for (const r of this.residents) this.remember(r, `集会で「${a.agenda}」について話し合ったが、話はまとまらなかった`);
+      return;
+    }
+    a.result = result;
+    for (const sp of result.speeches) {
+      const who = this.get(sp.speakerId);
+      if (who) this.log(`${who.profile.name}「${sp.text}」`, 'speech', { speakerId: who.profile.id });
+    }
+    const yes = result.votes.filter((v) => v.yes).length;
+    const no = result.votes.length - yes;
+    const p = result.proposal;
+    const target = p.targetId ? this.get(p.targetId) : undefined;
+    const outcome = this.describeProposal(p, target);
+    const verdict = p.kind === 'none' ? '採決はしなかった' : `賛成${yes}・反対${no}で${result.passed ? '可決' : '否決'}`;
+    this.announce(`集会で「${a.agenda}」が話し合われた。${p.kind === 'none' ? '' : `提案：${outcome}。`}${verdict}`, 'assembly');
+
+    for (const v of result.votes) {
+      const voter = this.get(v.voterId);
+      if (!voter) continue;
+      this.remember(voter, `集会（「${a.agenda}」）で、${p.kind === 'none' ? '話し合った' : `「${outcome}」に${v.yes ? '賛成' : '反対'}した（${verdict}）`}`);
+    }
+    for (const r of this.residents) {
+      if (!result.votes.some((v) => v.voterId === r.profile.id)) this.remember(r, `集会で「${a.agenda}」が話し合われ、${verdict}`);
+    }
+    if (!result.passed || p.kind === 'none') return;
+
+    // 罰を受ける人は、賛成した人を覚えている
+    if (target && (p.kind === 'exile' || p.kind === 'fine')) {
+      for (const v of result.votes) {
+        const voter = this.get(v.voterId);
+        if (v.yes && voter && voter !== target) this.feel(target, voter, -15, `${this.clock.day}日目の集会で、自分への「${outcome}」に賛成した`);
+      }
+    }
+    switch (p.kind) {
+      case 'exile':
+        if (target) {
+          target.leaving = `集会で村から追放された（${a.agenda}）`;
+          target.override = null;
+          this.log(`${target.profile.name}は村を出ていかなければならなくなった`, 'assembly');
+        }
+        return;
+      case 'fine': {
+        if (!target || !p.amount) return;
+        const amount = Math.min(target.money, Math.round(p.amount));
+        const to = p.beneficiaryId ? this.get(p.beneficiaryId) : undefined;
+        const receivers = to && to !== target ? [to] : this.residents.filter((r) => r !== target);
+        target.money -= amount;
+        const share = Math.floor(amount / Math.max(1, receivers.length));
+        receivers.forEach((r, i) => (r.money += share + (i === 0 ? amount - share * receivers.length : 0)));
+        this.log(`${target.profile.name}は罰金${amount}Gを払った（${to ? `${to.profile.name}へ` : '村のみんなで分けた'}）`, 'assembly');
+        return;
+      }
+      case 'rule': {
+        const law: Law = {
+          id: ++this.lawSeq,
+          title: p.title || '決まり',
+          text: p.text || p.title || '',
+          enactedDay: this.clock.day,
+          assemblyId: a.id,
+        };
+        this.laws.push(law);
+        this.announce(`村の決まりができた：「${law.title}」${law.text && law.text !== law.title ? `（${law.text}）` : ''}`, 'assembly');
+        return;
+      }
+      case 'repeal': {
+        const i = this.laws.findIndex((l) => l.id === p.lawId);
+        if (i < 0) return;
+        const [law] = this.laws.splice(i, 1);
+        this.announce(`村の決まり「${law.title}」が廃止された`, 'assembly');
+        return;
+      }
+    }
+  }
+
+  private describeProposal(p: AssemblyResult['proposal'], target?: Resident): string {
+    const name = target?.profile.name ?? '（誰か）';
+    switch (p.kind) {
+      case 'exile':
+        return `${name}を村から追放する`;
+      case 'fine': {
+        const to = p.beneficiaryId ? this.get(p.beneficiaryId)?.profile.name : undefined;
+        return `${name}に罰金${p.amount ?? 0}Gを科す${to ? `（${to}に払う）` : ''}`;
+      }
+      case 'rule':
+        return `決まり「${p.title ?? ''}」を作る${p.text && p.text !== p.title ? `（${p.text}）` : ''}`;
+      case 'repeal':
+        return `決まり「${this.laws.find((l) => l.id === p.lawId)?.title ?? `#${p.lawId}`}」を廃止する`;
+      default:
+        return '話し合うだけ';
+    }
+  }
+
   // ───────────── 出会いと会話 ─────────────
 
   private tryIndoorEncounter(r: Resident, place: Place) {
-    if (r.action === 'sleep') return;
+    if (r.action === 'sleep' || r.action === 'gather') return;
     const other = this.residents.find(
       (o) => o !== r && o.indoors && o.placeId === place.id && !o.conversation && o.action !== 'sleep' && this.canMeet(r, o),
     );

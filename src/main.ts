@@ -3,6 +3,7 @@ import { ConversationDirector } from './ai/director';
 import { AutoGod } from './ai/god';
 import { LifePlanner } from './ai/lifePlanner';
 import { OllamaClient } from './ai/llm';
+import { AssemblyDirector } from './ai/assembly';
 import { ModelPicker, savedModel } from './ui/modelPicker';
 import { Renderer } from './render/renderer';
 import { GodPanel } from './ui/godPanel';
@@ -44,6 +45,7 @@ async function main() {
   const llm = new OllamaClient();
   const director = new ConversationDirector(sim, llm);
   const lifePlanner = new LifePlanner(sim, llm);
+  new AssemblyDirector(sim, llm);
   const panel = new Panel(sim, renderer, llm, director, lifePlanner);
   const autoGod = new AutoGod(sim, llm);
   if (save?.autoGod) autoGod.setEnabled(true);

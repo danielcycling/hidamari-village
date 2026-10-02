@@ -27,13 +27,19 @@ const TEMPLATE = `
         <select name="mode" aria-label="方法">
           <option value="whisper">天の声で耳打ち</option>
           <option value="rumor">噂を吹き込む</option>
+          <option value="tempt">悪魔のささやき</option>
         </select>
       </div>
       <div class="god-row">
-        <input name="text" maxlength="80" placeholder="例：ユイ先生は都会に帰るつもりらしい" required />
+        <input name="text" maxlength="80" placeholder="例：明日は嵐が来るかもしれない" required />
         <button>送る</button>
       </div>
     </form>
+  </section>
+
+  <section class="god-section">
+    <h3>村の決まりと集会</h3>
+    <ul class="god-laws" data-laws></ul>
   </section>
 
   <section class="god-section">
@@ -70,6 +76,28 @@ export class GodPanel {
     };
     sim.events.on('residentAdded', refresh);
     sim.events.on('residentDied', refresh);
+    this.refreshLaws();
+    sim.events.on('log', (e) => {
+      if (e.kind === 'assembly' || (e.kind === 'life' && e.text.includes('集会'))) this.refreshLaws();
+    });
+  }
+
+  /** 今ある村の決まりと、予定されている集会 */
+  private refreshLaws() {
+    const list = this.root.querySelector('[data-laws]')!;
+    const items: string[] = [
+      ...this.sim.assemblies
+        .filter((a) => a.status !== 'done')
+        .map((a) => `📣 ${a.day}日目 ${Math.floor((a.from % 1440) / 60)}時〜 集会「${a.agenda}」（${a.callerName}）`),
+      ...this.sim.laws.map((l) => `📜 ${l.title}${l.text && l.text !== l.title ? `：${l.text}` : ''}（${l.enactedDay}日目）`),
+    ];
+    list.replaceChildren(
+      ...(items.length ? items : ['まだ決まりはありません。村人が集会を開けば生まれます。']).map((t) => {
+        const li = document.createElement('li');
+        li.textContent = t;
+        return li;
+      }),
+    );
   }
 
   private form(name: string): HTMLFormElement {
@@ -123,16 +151,30 @@ export class GodPanel {
   private buildWhisperForm() {
     const form = this.form('whisper');
     this.fillTargets();
+    const examples: Record<string, string> = {
+      whisper: '例：明日は嵐が来るかもしれない',
+      rumor: '例：あの人は食べ物を隠し持っているらしい',
+      tempt: '例：あいつは食べ物をたくさん持っている。少しくらい取っても…',
+    };
+    const mode = form.elements.namedItem('mode') as HTMLSelectElement;
+    const input = form.elements.namedItem('text') as HTMLInputElement;
+    mode.addEventListener('change', () => (input.placeholder = examples[mode.value] ?? ''));
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       const get = (n: string) => form.elements.namedItem(n) as HTMLInputElement | HTMLSelectElement;
       const target = this.sim.get(get('target').value);
       const text = get('text').value.trim();
       if (!target || !text) return;
-      if (get('mode').value === 'rumor') this.sim.plantRumor(target, text);
+      const mode = get('mode').value;
+      if (mode === 'rumor') this.sim.plantRumor(target, text);
+      else if (mode === 'tempt') this.sim.tempt(target, text);
       else this.sim.whisper(target, text);
       get('text').value = '';
-      this.feedback(`${target.profile.name}に届きました。次に誰かと話すとき、話題にするかもしれません`);
+      this.feedback(
+        mode === 'tempt'
+          ? `${target.profile.name}の心に、自分の考えとして浮かびました。2日のあいだ、計画や判断のたびに頭をよぎります`
+          : `${target.profile.name}に届きました。次に誰かと話すとき、話題にするかもしれません`,
+      );
     });
   }
 

@@ -181,6 +181,7 @@ function describe(sim: Simulation, self: Resident, other: Resident): string {
     ...between(sim, self, other),
     ...section('自分がしたことで、隠していること（話すかどうかは自分しだい）', secretsOf(sim, self)),
     ...section('人のしたことで、知っていること（話すかどうかは自分しだい）', knowledgeOf(sim, self)),
+    ...(sim.temptationOf(self) ? [`心の奥でくすぶっている考え（口に出すかどうかは自分しだい）: 「${sim.temptationOf(self)}」`] : []),
     `最近の記憶:`,
     ...(memories.length > 0 ? memories.map((m) => `- ${m.day}日目 ${m.time}: ${m.text}`) : ['- 特になし']),
     ...[topicNotice(memories.map((m) => m.text))].filter(Boolean),
@@ -192,6 +193,7 @@ export function buildMessages(ctx: ConversationContext): ChatMessage[] {
   const user = [
     `日時: ${ctx.dateTime}（${timeOfDay(ctx.hour)}）　天気: ${ctx.weather}`,
     `場所: ${ctx.placeName}`,
+    ...(ctx.sim.laws.length ? [`村の決まり: ${ctx.sim.laws.map((l) => `「${l.title}」`).join('、')}`] : []),
     `村の最近の出来事（みんな知っている）:`,
     ...(ctx.news.length > 0 ? ctx.news.map((n) => `- ${n}`) : ['- 特になし']),
     '',
@@ -261,7 +263,8 @@ const AGREEMENT_SYSTEM = `あなたは村の記録係です。村人2人の会�
 - feelings には、それぞれの人物がこの会話のあと相手をどう感じたか（change は -15〜+15）と、その理由（reason、30文字以内）を書く。言葉が丁寧でも、頼みを断られた・損をさせられた・約束を破られた・見下された・相手だけが得をしたなら下がる。実際に助けられた・得をしたなら上がる。何も起きなければ 0。2人の状況（飢えているか、持っているか）も踏まえて、人間らしく冷静に判断する。
 - disclosures には、会話の中で番号つきの出来事（[#番号]）について相手に話したものを書く（deed=番号、from=話した人、to=聞いた人）。ほのめかしただけ・話さなかったものは書かない。
 - 持っていない物やお金は渡せない。持ち物と所持金をよく見る。
-- quote には、そのやりとりが決まった根拠のセリフを会話からそのまま抜き出す。品物の名前や数・金額が、会話の中で実際に言われていなければ書かない（数を自分で補わない）。
+- まとめに「分けた」「渡した」「売った」などと書かれているのに対応するやりとりがあれば、それも必ず書き出す（品物と数はセリフかまとめから）。
+- quote には、そのやりとりが決まった根拠のセリフ（またはまとめの文）を、そのまま抜き出す。品物の名前や数・金額が、会話の中で実際に言われていなければ書かない（数を自分で補わない）。
 - 何もまとまっていなければ、agreements は空の配列にする。
 - text は日本語で書く。出力はJSONのみ。`;
 
