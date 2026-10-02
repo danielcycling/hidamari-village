@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ひだまり村 — AI村の観察日記</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <h1>ひだまり村 <span>観察日記</span></h1>
+        <div class="clock" id="clock">1日目 06:00</div>
+        <div class="ai-status" id="ai-status" data-state="connecting">
+          <i aria-hidden="true"></i><span>AIに接続中…</span>
+        </div>
+        <div class="speed" id="speed" role="group" aria-label="時間の速さ"></div>
+        <button class="reset" id="reset" title="保存を消して、1日目からやり直します">最初から</button>
+      </header>
+      <main class="layout">
+        <section class="stage">
+          <div class="canvas-wrap"><canvas id="world"></canvas></div>
+          <ul id="residents" class="residents" aria-label="住民"></ul>
+        </section>
+        <aside class="side">
+          <div class="tabs" role="tablist">
+            <button role="tab" id="tab-log" aria-controls="panel-log" aria-selected="true">出来事</button>
+            <button role="tab" id="tab-mind" aria-controls="panel-mind" aria-selected="false">心</button>
+            <button role="tab" id="tab-graph" aria-controls="panel-graph" aria-selected="false">相関図</button>
+            <button role="tab" id="tab-god" aria-controls="panel-god" aria-selected="false">神の力</button>
+          </div>
+          <section class="tab-panel" id="panel-log" role="tabpanel" aria-labelledby="tab-log">
+            <ol id="log" class="log"></ol>
+          </section>
+          <section class="tab-panel mind" id="panel-mind" role="tabpanel" aria-labelledby="tab-mind" hidden></section>
+          <section class="tab-panel graph" id="panel-graph" role="tabpanel" aria-labelledby="tab-graph" hidden></section>
+          <section class="tab-panel god" id="panel-god" role="tabpanel" aria-labelledby="tab-god" hidden></section>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

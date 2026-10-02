@@ -1,0 +1,133 @@
+import type { ItemId } from '../world/economy';
+import { WORK_ACTIONS, type WorkAction } from '../world/planner';
+import type {
+  Agreement,
+  AgreementType,
+  Conversation,
+  ConversationOutcome,
+  DialogueLine,
+  Reflection,
+  Simulation,
+} from '../world/sim';
+import type { OllamaClient } from './llm';
+import { AGREEMENT_TYPES, buildMessages, buildSchema, MAX_LINE_CHARS, type RawConversation } from './prompt';
+import { ITEM_IDS } from '../world/economy';
+
+/** 未接続のときに再接続を試みる間隔（ミリ秒） */
+const RECONNECT_INTERVAL = 15_000;
+
+/**
+ * 出会いをAIに渡して会話を作らせる係。
+ * ローカルLLMは一度に1件しかさばけないので、考えている間の出会いはあいさつで済ませる。
+ */
+export class ConversationDirector {
+  lastError: string | null = null;
+
+  constructor(
+    private readonly sim: Simulation,
+    private readonly llm: OllamaClient,
+  ) {
+    sim.conversationGate = () => (this.llm.status === 'ready' && !this.llm.busy ? 'ai' : 'greeting');
+    sim.events.on('encounter', (conv) => void this.compose(conv));
+  }
+
+  async start(requestedModel: string | null): Promise<void> {
+    await this.llm.connect(requestedModel);
+    setInterval(() => {
+      if (this.llm.status === 'offline') void this.llm.connect(requestedModel);
+    }, RECONNECT_INTERVAL);
+  }
+
+  private async compose(conv: Conversation) {
+    try {
+      const ctx = {
+        a: conv.a,
+        b: conv.b,
+        placeName: conv.placeName,
+        dateTime: this.sim.clock.format(),
+        hour: this.sim.clock.hourOfDay,
+        weather: this.sim.weather.kind === 'rain' ? '雨' : '晴れ',
+        news: this.sim.recentNews().slice(-5).map((n) => `${n.day}日目 ${n.time}: ${n.text}`),
+        sim: this.sim,
+        purpose: conv.purpose,
+      };
+      const raw = await this.llm.chatJSON<RawConversation>(buildMessages(ctx), buildSchema(ctx));
+      const parsed = parse(conv, raw);
+      if (!parsed) throw new Error('AIの返事を会話として読み取れなかった');
+      this.lastError = null;
+      this.sim.setDialogue(conv, parsed.lines, parsed.outcome);
+    } catch (e) {
+      this.lastError = e instanceof Error ? e.message : String(e);
+      console.warn('[director]', e);
+      this.sim.fallbackToGreeting(conv);
+    }
+  }
+}
+
+/** AIの出力を検証し、村で使える形に直す。使えなければ null */
+function parse(
+  conv: Conversation,
+  raw: RawConversation,
+): { lines: DialogueLine[]; outcome: ConversationOutcome } | null {
+  const byName = new Map([conv.a, conv.b].map((r) => [r.profile.name, r.profile.id]));
+  // 7Bモデルはときどき英語などを混ぜるので、そういう行は捨てる
+  const lines = (raw.lines ?? [])
+    .map((l) => ({ speakerId: byName.get(l.speaker) ?? '', text: clean(l.text, MAX_LINE_CHARS + 20) }))
+    .filter((l) => l.speakerId && l.text && !hasForeignWords(l.text));
+  if (lines.length < 2) return null;
+
+  const reflections: Reflection[] = [];
+  for (const r of [conv.a, conv.b]) {
+    const ref = raw.reflections?.[r.profile.name];
+    if (!ref) continue;
+    const memory = clean(ref.memory, 80);
+    const impression = clean(ref.impression, 24);
+    reflections.push({
+      residentId: r.profile.id,
+      memory: hasForeignWords(memory) ? '' : memory,
+      affinityDelta: Math.max(-15, Math.min(15, Math.round(Number(ref.affinity_change) || 0))),
+      impression: hasForeignWords(impression) ? '' : impression,
+    });
+  }
+  const agreements: Agreement[] = (raw.agreements ?? []).flatMap((ag): Agreement[] => {
+    const fromId = byName.get(ag.from);
+    const toId = byName.get(ag.to);
+    if (!fromId || !toId || fromId === toId || !AGREEMENT_TYPES.includes(ag.type as AgreementType)) return [];
+    const item = ITEM_IDS.includes(ag.item as ItemId) ? (ag.item as ItemId) : undefined;
+    const work = WORK_ACTIONS.includes(ag.work as WorkAction) ? (ag.work as WorkAction) : undefined;
+    const text = clean(ag.text, 60);
+    return [
+      {
+        type: ag.type as AgreementType,
+        fromId,
+        toId,
+        item,
+        qty: Number(ag.qty) || 0,
+        money: Number(ag.money) || 0,
+        days: Number(ag.days) || undefined,
+        action: work,
+        text: hasForeignWords(text) ? '' : text,
+      },
+    ];
+  });
+  const summary = clean(raw.summary, 80);
+  return {
+    lines,
+    outcome: {
+      agreements,
+      summary: summary && !hasForeignWords(summary) ? summary : `${conv.a.profile.name}と${conv.b.profile.name}は少し話をした`,
+      reflections,
+    },
+  };
+}
+
+/** 4文字以上のアルファベットの並び（英単語など）が混ざっているか */
+const hasForeignWords = (text: string) => /[A-Za-z]{4,}/.test(text);
+
+function clean(text: unknown, max: number): string {
+  const s = String(text ?? '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[「『"]|[」』"]$/g, '')
+    .trim();
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
