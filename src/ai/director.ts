@@ -78,11 +78,34 @@ export class ConversationDirector {
   private async extractAgreements(conv: Conversation, ctx: ConversationContext, raw: RawConversation) {
     try {
       const lines = (raw.lines ?? []).map((l) => ({ speaker: l.speaker, text: clean(l.text, MAX_LINE_CHARS + 20) }));
-      const res = await this.llm.chatJSON<{ agreements?: RawAgreement[] }>(
-        buildAgreementMessages(ctx, lines, clean(raw.summary, 80)),
-        buildAgreementSchema(ctx),
-      );
+      const res = await this.llm.chatJSON<{
+        agreements?: RawAgreement[];
+        disclosures?: { deed: number; from: string; to: string }[];
+        feelings?: Record<string, { change?: number; reason?: string }>;
+      }>(buildAgreementMessages(ctx, lines, clean(raw.summary, 80)), buildAgreementSchema(ctx));
       this.sim.addAgreements(conv, parseAgreements(conv, res.agreements ?? [], lines.map((l) => l.text)));
+      const byName = new Map([conv.a, conv.b].map((r) => [r.profile.name, r.profile.id]));
+      // 相手への気持ちは、会話を演じたAIではなく記録係が判定する（演じる側は仲良くまとめがちなので）
+      this.sim.addFeelings(
+        conv,
+        [conv.a, conv.b].flatMap((self) => {
+          const other = self === conv.a ? conv.b : conv.a;
+          const f = res.feelings?.[self.profile.name];
+          if (!f) return [];
+          const delta = Math.max(-15, Math.min(15, Math.round(Number(f.change) || 0)));
+          const reason = clean(f.reason, 40);
+          return [{ fromId: self.profile.id, toId: other.profile.id, delta, reason: hasForeignWords(reason) ? '' : reason }];
+        }),
+      );
+      // 非行のことを話したか（番号がセリフに出ていなくても、話した中身で記録係が判断する）
+      this.sim.addDisclosures(
+        conv,
+        (res.disclosures ?? []).flatMap((x) => {
+          const fromId = byName.get(x.from);
+          const toId = byName.get(x.to);
+          return fromId && toId && fromId !== toId ? [{ deedId: Number(x.deed), fromId, toId }] : [];
+        }),
+      );
     } catch (e) {
       console.warn('[director] agreements', e);
     }

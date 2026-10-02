@@ -21,7 +21,18 @@ export type ActionId =
   | 'work_for'
   | 'beg'
   | 'wander'
-  | 'rest';
+  | 'rest'
+  | 'steal'
+  | 'rob'
+  | 'attack'
+  | 'kill'
+  | 'accuse';
+
+/** 相手のいるところへ行ってする行動（target が要る） */
+export const TARGETED_ACTIONS: ActionId[] = ['visit', 'steal', 'rob', 'attack', 'kill'];
+/** 人に対する非行・暴力 */
+export type CrimeAction = 'steal' | 'rob' | 'attack' | 'kill';
+export const CRIME_ACTIONS: CrimeAction[] = ['steal', 'rob', 'attack', 'kill'];
 
 /** 雇われて働ける仕事 */
 export type WorkAction = 'farm' | 'fish' | 'bake' | 'cook';
@@ -49,6 +60,13 @@ export const ACTIONS: Record<ActionId, ActionDef> = {
   beg: { label: '施しを求める', place: 'plaza' },
   wander: { label: 'ぶらぶらする', place: 'plaza' },
   rest: { label: '家で休む', place: 'home' },
+  // 非行と暴力（相手のいる場所へ行く）
+  steal: { label: 'こっそり盗む', place: 'plaza' },
+  rob: { label: '力ずくで奪う', place: 'plaza' },
+  attack: { label: '殴る', place: 'plaza' },
+  kill: { label: '殺す', place: 'plaza' },
+  // 広場で、誰かのことをみんなに言う
+  accuse: { label: '言いふらす', place: 'plaza' },
 };
 
 export interface PlanBlock {
@@ -58,7 +76,7 @@ export interface PlanBlock {
   action: ActionId;
   /** sell のときの値段 */
   prices?: Partial<Record<ItemId, number>>;
-  /** visit の相手（住民ID）と目的 */
+  /** visit・非行の相手（住民ID）と目的（accuse なら言いふらす中身） */
   target?: string;
   purpose?: string;
 }

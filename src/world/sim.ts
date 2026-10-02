@@ -9,6 +9,7 @@ import {
   rollWeather,
   WEATHER,
   type Condition,
+  type ConditionKind,
   type WeatherKind,
 } from './weather';
 import { Clock } from './clock';
@@ -52,7 +53,9 @@ import {
   ACTIONS,
   DAILY_NEED,
   rulePlan,
+  TARGETED_ACTIONS,
   type ActionId,
+  type CrimeAction,
   type DailyPlan,
   type PlanBlock,
   type WorkAction,
@@ -94,6 +97,26 @@ const BUY_INTERVAL = 15;
 export const PLANNING_HOUR = 21;
 /** 新入村民が来るかどうかを判定する時刻（時） */
 const IMMIGRATION_HOUR = 10;
+/** 飢えて頼んだのに断られたときの、相手への気持ちの下がり方 */
+const REFUSAL_GRUDGE = 8;
+/** 盗み・暴力を見ていられる距離（マス） */
+const WITNESS_RANGE = 7;
+/** 盗まれた本人がその場で気づく確率 */
+const STEAL_NOTICE = 0.35;
+/** 居合わせた人が盗みに気づく確率・暴力に気づく確率 */
+const STEAL_WITNESS = 0.5;
+const VIOLENCE_WITNESS = 0.9;
+/** やられた人・見た人の、相手への気持ちの下がり方 */
+const VICTIM_GRUDGE: Record<CrimeAction, number> = { steal: 30, rob: 40, attack: 50, kill: 70 };
+const WITNESS_GRUDGE: Record<CrimeAction, number> = { steal: 15, rob: 20, attack: 25, kill: 50 };
+/** 「AがB〇〇」の〇〇 */
+const DEED_LABEL: Record<CrimeAction, string> = {
+  steal: 'から物を盗む',
+  rob: 'から力ずくで奪う',
+  attack: 'を殴る',
+  kill: 'を殺す',
+};
+
 /** その日の空模様が決まる時刻 */
 const WEATHER_HOUR = 5;
 const MAX_HISTORY_DAYS = 7;
@@ -195,6 +218,22 @@ export interface Resident {
   visited?: { targetId: string; until: number };
   /** 危機の判断をLLMに頼んだ時刻 */
   crisisRequestedAt?: number;
+  /** 最後に会ったときに見た、相手の様子と持っていた食べ物（人の持ち物は、見たことしか分からない） */
+  seen?: Record<string, Sighting>;
+  /** 施しを求め始めた時刻と、そのときの食べ物（もらえたかどうかを後で確かめる） */
+  begging?: { since: number; food: number; money: number };
+}
+
+/** 人を見かけたときに分かったこと */
+export interface Sighting {
+  day: number;
+  time: string;
+  at: number;
+  /** 持っていた食べ物（「パン2・魚1」。何もなければ空） */
+  food: string;
+  foodValue: number;
+  /** 見た目（やつれている・元気そう など） */
+  looks: string;
 }
 
 /** 計画どおりにできないとき・危機のときの、一時的な行動 */
@@ -244,7 +283,43 @@ export interface Employment {
   workedToday: number;
 }
 
-export type AgreementType = 'trade' | 'gift' | 'loan' | 'repay' | 'hire' | 'quit' | 'teach' | 'promise';
+export type AgreementType = 'trade' | 'gift' | 'loan' | 'repay' | 'hire' | 'quit' | 'teach' | 'promise' | 'hush';
+
+/** 誰かが誰かにした非行・暴力の記録。誰が知っているかも持つ（秘密はここから生まれる） */
+export interface Deed {
+  id: number;
+  kind: CrimeAction;
+  actorId: string;
+  actorName: string;
+  victimId: string;
+  victimName: string;
+  /** うまくいったか（盗めた・奪えた・殺せた） */
+  success: boolean;
+  item?: ItemId;
+  qty?: number;
+  money?: number;
+  /** 殴った・抵抗されたときの傷 */
+  damage?: number;
+  day: number;
+  time: string;
+  placeName: string;
+  /** 誰がやったかを知っている人（本人以外）。saw=見た、victim=やられて相手を見た、heard=人から聞いた */
+  knownBy: Record<string, 'saw' | 'victim' | 'heard'>;
+  /** 本人が「見られた」と気づいている相手 */
+  actorSawWitness: string[];
+  /** 口止めされて、黙ると約束した人 */
+  hushed: string[];
+  /** 広場で言いふらされたなどで、村のみんなが聞いている */
+  public: boolean;
+}
+
+/** 盗まれた人が、あとで物やお金が減っていることに気づく予定 */
+export interface PendingDiscovery {
+  deedId: number;
+  at: number;
+  /** 盗まれたころ近くにいた人（犯人を含むとは限らない） */
+  nearby: string[];
+}
 
 /**
  * 会話の中で決まったこと。from/to の意味は種類ごとに違う：
@@ -285,6 +360,8 @@ export interface DialogueLine {
 }
 
 export interface Reflection {
+  /** 好感度が動いた理由（記録係が判定したとき） */
+  reason?: string;
   residentId: string;
   memory: string;
   affinityDelta: number;
@@ -316,7 +393,16 @@ export interface Conversation {
   purpose?: string;
   /** 2人が立ち止まって話している時刻の終わり（村の分） */
   engagedUntil: number;
+  /** 会いに来た側（a）が、この会話で何かを受け取ったか */
+  received?: boolean;
+  /** 会話で決まったことの書き出しが済んだか */
+  agreementsReady?: boolean;
+  /** 「飢えて頼んだのに断られた」をもう確かめたか */
+  refusalChecked?: boolean;
 }
+
+/** 飢えた人が人を頼るときの用件の書き出し（断られたかどうかの判定に使う） */
+export const HUNGRY_PURPOSE = '食べる物がなくて困っている';
 
 export interface LogEntry {
   time: string;
@@ -334,7 +420,8 @@ export interface LogEntry {
     | 'death'
     | 'day'
     | 'plan'
-    | 'deal';
+    | 'deal'
+    | 'crime';
   speakerId?: string;
   /** 同じ会話のログをまとめて表示するための番号 */
   conversationId?: number;
@@ -435,6 +522,10 @@ export class Simulation {
   readonly employments: Employment[] = [];
   readonly deliveries: Delivery[] = [];
   dealSeq = 0;
+  /** 非行と暴力の記録（神の視点ではすべて見える） */
+  readonly deeds: Deed[] = [];
+  readonly pendingDiscoveries: PendingDiscovery[] = [];
+  deedSeq = 0;
   /**
    * 飢えかけた住民の判断をLLMに頼む。引き受けたら true（あとで setOverride が呼ばれる）。
    * 未設定、または false ならルールで動く。
@@ -530,13 +621,49 @@ export class Simulation {
 
   /** 会話のあとで書き出された取り決めを加える。会話がもう終わっていれば、すぐ実行する */
   addAgreements(conv: Conversation, agreements: Agreement[]): void {
-    if (agreements.length === 0 || !conv.outcome) return;
+    if (!conv.outcome) return;
+    conv.agreementsReady = true;
     if (this.conversations.includes(conv)) {
       conv.outcome.agreements.push(...agreements);
       return;
     }
     if (!this.residents.includes(conv.a) || !this.residents.includes(conv.b)) return;
     for (const ag of agreements) this.carryOut(conv, ag);
+    this.checkRefusal(conv);
+  }
+
+  /** 記録係が判定した、相手への気持ちの変化（理由つき）。会話が終わっていればすぐ反映する */
+  addFeelings(conv: Conversation, feelings: { fromId: string; toId: string; delta: number; reason: string }[]): void {
+    if (!conv.outcome) return;
+    for (const f of feelings) {
+      const ref = conv.outcome.reflections.find((r) => r.residentId === f.fromId);
+      if (this.conversations.includes(conv) && ref) {
+        ref.affinityDelta = f.delta;
+        ref.reason = f.reason;
+        continue;
+      }
+      const self = this.get(f.fromId);
+      const other = this.get(f.toId);
+      if (self && other && f.delta !== 0) this.feel(self, other, f.delta, `${this.clock.day}日目、${f.reason}`);
+    }
+  }
+
+  /**
+   * 飢えて食べ物を頼みに来た人が、何も受け取れずに会話が終わったら、それを事実として残す。
+   * 借金を返さないときと同じく、小さな恨みになる（それをどう扱うかは本人しだい）。
+   */
+  private checkRefusal(conv: Conversation) {
+    if (conv.refusalChecked || conv.kind !== 'ai' || !conv.purpose?.startsWith(HUNGRY_PURPOSE)) return;
+    conv.refusalChecked = true;
+    const asker = conv.a;
+    const other = conv.b;
+    if (conv.received || !this.residents.includes(asker) || !this.residents.includes(other)) return;
+    const had = foodValue(other.inventory) > 0;
+    const text = had
+      ? `飢えて${other.profile.name}に食べ物を頼んだが、何も分けてもらえなかった（${other.profile.name}は食べ物を持っていた）`
+      : `飢えて${other.profile.name}に食べ物を頼んだが、${other.profile.name}も何も持っていなかった`;
+    this.remember(asker, text);
+    if (had) this.feel(asker, other, -REFUSAL_GRUDGE, `${this.clock.day}日目、飢えて頼んだのに何も分けてくれなかった`);
   }
 
   /** AIが会話を考えられなかったときは、あいさつで済ませる */
@@ -580,6 +707,24 @@ export class Simulation {
   /** 最近（既定では2日以内）の出来事 */
   recentNews(withinMinutes = 2 * 1440): News[] {
     return this.news.filter((n) => this.clock.minutes - n.at <= withinMinutes);
+  }
+
+  /** 神さまが数日続く出来事を起こす（同じ側＝畑か川の出来事は入れ替わる） */
+  startCondition(kind: ConditionKind, days?: number): void {
+    const def = CONDITIONS[kind];
+    for (const c of this.conditions.filter((c) => CONDITIONS[c.kind].domain === def.domain)) {
+      this.conditions.splice(this.conditions.indexOf(c), 1);
+    }
+    const len = days ?? def.minDays + Math.floor(this.weatherRng() * (def.maxDays - def.minDays + 1));
+    this.conditions.push({ kind, untilDay: this.clock.day + len });
+    if (kind === 'drought' && isWet(this.weather.kind)) this.weather = { kind: 'clear', until: 0 };
+    this.announce(def.start);
+  }
+
+  /** 神さまが嵐を起こす（hours 時間） */
+  startStorm(hours: number): void {
+    this.weather = { kind: 'storm', until: this.clock.minutes + hours * 60 };
+    this.announce('急に空が暗くなり、嵐がやってきた。川は荒れ、畑仕事もままならない');
   }
 
   startRain(hours: number): void {
@@ -703,7 +848,7 @@ export class Simulation {
     return r;
   }
 
-  private die(r: Resident, cause: string) {
+  private die(r: Resident, cause: string, announcement = `${r.profile.name}が${cause}で亡くなった`) {
     if (r.conversation) this.finishConversation(r.conversation);
     this.residents.splice(this.residents.indexOf(r), 1);
     const home = this.map.places[r.profile.homeId];
@@ -719,8 +864,8 @@ export class Simulation {
     // 残したものは家に置かれたまま（誰のものでもなくなる）
     this.estates[home.id] = { ownerName: r.profile.name, money: r.money, inventory: r.inventory };
     home.name = '空き家';
-    for (const o of this.residents) this.remember(o, `${r.profile.name}が${cause}で亡くなった`);
-    this.announce(`${r.profile.name}が${cause}で亡くなった`, 'death');
+    for (const o of this.residents) this.remember(o, announcement);
+    this.announce(announcement, 'death');
     this.events.emit('residentDied', grave);
   }
 
@@ -760,6 +905,7 @@ export class Simulation {
     this.lastHour = hour;
     this.events.emit('hourly', { day: this.clock.day, hour: hour % 24 });
     this.settleDeliveries();
+    this.discoverThefts();
     this.updateWeather();
     for (const r of this.residents) {
       const spoiled = removeSpoiled(r.inventory, this.clock.minutes);
@@ -785,6 +931,19 @@ export class Simulation {
   /** 1日の終わり：出来高を要約して記憶とログに残し、使わなかった技能を衰えさせる */
   private endOfDay() {
     const day = this.clock.day - 1;
+    // 飢えた人は、そのとき食べ物を余らせていた人を覚えている（恨むかどうかは本人しだい）
+    for (const r of this.residents) {
+      if (r.satiety > 0) continue;
+      // 自分の目で見た範囲で（今日会ったときに、たくさん持っていた人）
+      const rich = this.residents.filter((o) => {
+        const s = r.seen?.[o.profile.id];
+        return o !== r && s && s.day === day && s.foodValue >= DAILY_NEED * 1.5;
+      });
+      if (rich.length > 0) {
+        const names = rich.map((o) => `${o.profile.name}（${r.seen![o.profile.id].time}に会ったとき${r.seen![o.profile.id].food}を持っていた）`);
+        this.remember(r, `${day}日目、自分は飢えていたのに、食べ物をたくさん持っている人がいた：${names.join('、')}`);
+      }
+    }
     for (const r of this.residents) {
       const summary = summarizeDay(r.today);
       r.history.push({
@@ -1032,6 +1191,7 @@ export class Simulation {
     this.handleHunger(r);
     const task = this.currentTask(r);
     r.activity = task.label;
+    this.trackBegging(r, task);
     if (task.placeId !== r.targetPlaceId) {
       this.closeShop(r);
       r.action = task.action;
@@ -1052,6 +1212,23 @@ export class Simulation {
         this.wander(r);
       }
     }
+  }
+
+  /** 施しを求めた結果を、やめたときに記憶に残す（何ももらえなかったことも事実として覚える） */
+  private trackBegging(r: Resident, task: Task) {
+    const now = this.clock.minutes;
+    if (task.action === 'beg') {
+      r.begging ??= { since: now, food: foodValue(r.inventory), money: r.money };
+      return;
+    }
+    if (!r.begging) return;
+    const { since, food, money } = r.begging;
+    r.begging = undefined;
+    const minutes = now - since;
+    if (minutes < 30) return;
+    const got = foodValue(r.inventory) > food || r.money > money;
+    const hours = Math.max(1, Math.round(minutes / 60));
+    this.remember(r, got ? `広場で${hours}時間ほど施しを求め、少し分けてもらえた` : `広場で${hours}時間ほど施しを求めたが、誰も何も分けてくれなかった`);
   }
 
   /** 満腹度・体力・食事・死 */
@@ -1133,14 +1310,22 @@ export class Simulation {
       ({ action, target, purpose } = r.override);
     } else r.override = null;
 
-    if (action === 'visit') {
+    if (TARGETED_ACTIONS.includes(action)) {
       const t = target ? this.get(target) : undefined;
       const done = r.visited && r.visited.targetId === target && now < r.visited.until;
       if (t && !done) {
         const placeId = t.placeId ?? (t.targetPlaceId || 'plaza');
-        return { placeId, action, label: `${t.profile.name}に会いに行く`, block, target, purpose };
+        // 盗みに行く人は、はた目にはぶらついているだけに見える
+        const label =
+          action === 'steal' ? 'ぶらぶらする' : action === 'visit' ? `${t.profile.name}に会いに行く` : `${t.profile.name}のところへ行く`;
+        return { placeId, action, label, block, target, purpose };
       }
       action = 'wander';
+    }
+    if (action === 'accuse') {
+      const done = r.visited && r.visited.targetId === 'accuse' && now < r.visited.until;
+      if (!purpose || done) action = 'wander';
+      else return { placeId: 'plaza', action, label: '広場で話して回る', block, target, purpose };
     }
     if (action === 'work_for') {
       const emp = this.employmentOf(r);
@@ -1183,7 +1368,14 @@ export class Simulation {
         break;
       }
       case 'visit':
+      case 'steal':
+      case 'rob':
+      case 'attack':
+      case 'kill':
         this.approach(r, task);
+        break;
+      case 'accuse':
+        this.accuse(r, task);
         break;
       case 'sell':
         if (!r.shop) this.openShop(r, task.block);
@@ -1237,8 +1429,13 @@ export class Simulation {
       if (r.state !== 'walking') this.setPath(r, { x: Math.round(t.x), y: Math.round(t.y) });
       return;
     }
+    if (task.action !== 'visit') {
+      r.visited = { targetId: t.profile.id, until: this.taskEnd(r, task) };
+      this.commit(r, t, task.action as CrimeAction);
+      return;
+    }
     if (t.conversation || t.action === 'sleep') return;
-    r.visited = { targetId: t.profile.id, until: blockEnd(this.clock.minutes, task.block) };
+    r.visited = { targetId: t.profile.id, until: this.taskEnd(r, task) };
     this.startConversation(r, t, this.map.places[r.placeId!]?.name ?? '道ばた', r.indoors, task.purpose || '用があって会いに来た');
   }
 
@@ -1320,6 +1517,8 @@ export class Simulation {
 
   private tryBuy(buyer: Resident) {
     const sellers = this.residents.filter((s) => s !== buyer && s.shop && s.placeId === buyer.placeId);
+    // 市場の店先に並んだものは、買いに来た人の目に入る
+    for (const s of sellers) this.observe(buyer, s);
     const bought = new Map<Resident, { item: ItemId; qty: number; paid: number }[]>();
     const record = (seller: Resident, item: ItemId, price: number) => {
       const taken = takeItem(seller.inventory, item, 1);
@@ -1454,7 +1653,9 @@ export class Simulation {
       return;
     }
     const task = this.currentTask(r);
-    if (place.capacity && this.occupants(place, r) >= place.capacity) {
+    // 設備を使いに来たときだけ定員を気にする（人に会いに来た・何かしに来たときは関係ない）
+    const usesPlace = ACTIONS[task.action as ActionId]?.place === place.id && !TARGETED_ACTIONS.includes(task.action as ActionId);
+    if (usesPlace && place.capacity && this.occupants(place, r) >= place.capacity) {
       // 満員なら、空いている別の材料集めに回る。それも無理なら市場をぶらつく
       const alt = (['fish', 'farm'] as const).find((a) => {
         const p = this.map.places[ACTIONS[a].place];
@@ -1479,6 +1680,268 @@ export class Simulation {
     ).length;
   }
 
+  // ───────────── 非行と暴力 ─────────────
+
+  /** 顔を合わせた相手の様子と持ち物を覚える（お互いに） */
+  observe(self: Resident, other: Resident): void {
+    const foods = ITEM_IDS.filter((id) => isFood(id) && countItem(other.inventory, id) > 0);
+    (self.seen ??= {})[other.profile.id] = {
+      day: this.clock.day,
+      time: this.clock.formatTime(),
+      at: this.clock.minutes,
+      food: foods.map((id) => `${ITEMS[id].name}${countItem(other.inventory, id)}`).join('・'),
+      foodValue: foodValue(other.inventory),
+      looks: looksOf(other),
+    };
+  }
+
+  /** 今の行動が終わる時刻（臨時の行動ならその終わり、計画ならブロックの終わり） */
+  private taskEnd(r: Resident, task: Task): number {
+    const now = this.clock.minutes;
+    return r.override && now < r.override.until ? r.override.until : blockEnd(now, task.block);
+  }
+
+  /** その場に居合わせて、見ていたかもしれない人 */
+  private bystanders(actor: Resident, victim: Resident): Resident[] {
+    return this.residents.filter((o) => {
+      if (o === actor || o === victim || o.action === 'sleep' || o.leaving) return false;
+      if (actor.indoors) return o.indoors && o.placeId === actor.placeId;
+      return !o.indoors && Math.hypot(o.x - actor.x, o.y - actor.y) <= WITNESS_RANGE;
+    });
+  }
+
+  /** 相手から食べ物（なければお金）を取る。share は取る割合 */
+  private takeFrom(actor: Resident, victim: Resident, share: number): Pick<Deed, 'item' | 'qty' | 'money'> {
+    const foods = ITEM_IDS.filter((id) => isFood(id) && countItem(victim.inventory, id) > 0).sort(
+      (a, b) => ITEMS[b].satiety * countItem(victim.inventory, b) - ITEMS[a].satiety * countItem(victim.inventory, a),
+    );
+    if (foods.length > 0) {
+      const item = foods[0];
+      const qty = Math.max(1, Math.ceil(countItem(victim.inventory, item) * share));
+      moveItems(victim.inventory, actor.inventory, item, qty, this.clock.minutes);
+      return { item, qty };
+    }
+    const money = Math.floor(victim.money * share);
+    if (money <= 0) return {};
+    victim.money -= money;
+    actor.money += money;
+    return { money };
+  }
+
+  /** 盗んだもの・奪ったものを言葉にする */
+  private loot(d: Pick<Deed, 'item' | 'qty' | 'money'>): string {
+    if (d.item) return `${ITEMS[d.item].name}${d.qty}個`;
+    if (d.money) return `${d.money}G`;
+    return '';
+  }
+
+  /** 非行・暴力を実行する（相手のそばに来たときに呼ぶ） */
+  private commit(actor: Resident, victim: Resident, kind: CrimeAction) {
+    const place = actor.indoors ? (this.map.places[actor.placeId!]?.name ?? '家の中') : this.locationName(actor);
+    const deed: Deed = {
+      id: ++this.deedSeq,
+      kind,
+      actorId: actor.profile.id,
+      actorName: actor.profile.name,
+      victimId: victim.profile.id,
+      victimName: victim.profile.name,
+      success: false,
+      day: this.clock.day,
+      time: this.clock.formatTime(),
+      placeName: place,
+      knownBy: {},
+      actorSawWitness: [],
+      hushed: [],
+      public: false,
+    };
+    const A = actor.profile.name;
+    const B = victim.profile.name;
+    const asleep = victim.action === 'sleep';
+    // 力くらべ：体力の差がものをいう。寝ている人・弱った人は抵抗できない
+    const edge = (actor.health - victim.health) / 150 + (asleep ? 0.3 : 0);
+    let what = '';
+
+    if (kind === 'steal') {
+      Object.assign(deed, this.takeFrom(actor, victim, 0.5));
+      deed.success = !!(deed.item || deed.money);
+      what = deed.success ? `${B}から${this.loot(deed)}を盗んだ` : `${B}から盗もうとしたが、盗めるものがなかった`;
+      if (deed.success && this.rng() < (asleep ? 0.1 : STEAL_NOTICE)) {
+        deed.knownBy[victim.profile.id] = 'victim';
+        deed.actorSawWitness.push(victim.profile.id);
+      }
+    } else if (kind === 'rob') {
+      deed.success = this.rng() < clamp01(0.55 + edge, 0.15, 0.9);
+      if (deed.success) {
+        Object.assign(deed, this.takeFrom(actor, victim, 1));
+        what = deed.item || deed.money ? `${B}から${this.loot(deed)}を力ずくで奪った` : `${B}から奪おうとしたが、何も持っていなかった`;
+        this.hurt(victim, (deed.damage = 5));
+      } else {
+        what = `${B}から奪おうとしたが、抵抗されて失敗した`;
+        this.hurt(actor, 10);
+        this.hurt(victim, (deed.damage = 5));
+      }
+      deed.knownBy[victim.profile.id] = 'victim';
+      deed.actorSawWitness.push(victim.profile.id);
+    } else if (kind === 'attack') {
+      deed.success = true;
+      deed.damage = Math.round(20 + this.rng() * 25);
+      this.hurt(actor, 3);
+      what = `${B}を殴った`;
+      deed.knownBy[victim.profile.id] = 'victim';
+      deed.actorSawWitness.push(victim.profile.id);
+    } else {
+      deed.success = this.rng() < clamp01(0.45 + edge, 0.1, 0.95);
+      if (deed.success) what = `${B}を殺した`;
+      else {
+        deed.damage = Math.round(25 + this.rng() * 25);
+        what = `${B}を殺そうとしたが、${B}は逃げのびた`;
+        deed.knownBy[victim.profile.id] = 'victim';
+        deed.actorSawWitness.push(victim.profile.id);
+      }
+    }
+
+    // 居合わせた人が見ていたか（暴力はまず気づかれる、盗みは半々）
+    const nearby = this.bystanders(actor, victim);
+    for (const w of nearby) {
+      if (this.rng() >= (kind === 'steal' ? STEAL_WITNESS : VIOLENCE_WITNESS)) continue;
+      deed.knownBy[w.profile.id] = 'saw';
+      if (this.rng() < 0.5 || kind !== 'steal') deed.actorSawWitness.push(w.profile.id);
+    }
+    this.deeds.push(deed);
+    const seenBy = Object.keys(deed.knownBy)
+      .filter((id) => id !== victim.profile.id)
+      .map((id) => this.get(id)?.profile.name)
+      .filter(Boolean);
+    this.log(`${A}が${place}で${what}${seenBy.length ? `（見ていた人：${seenBy.join('、')}）` : '（誰にも見られなかった）'}`, 'crime');
+
+    // 本人の記憶（見られたと気づいた相手だけが分かる）
+    const noticed = deed.actorSawWitness.map((id) => this.get(id)?.profile.name).filter(Boolean);
+    this.remember(actor, `${place}で${what}。${noticed.length ? `${noticed.join('、')}に見られた` : '誰にも見られなかったと思う'}`);
+
+    // 被害者・目撃者の記憶と気持ち
+    const label = DEED_LABEL[kind];
+    if (deed.knownBy[victim.profile.id] && (kind !== 'kill' || !deed.success)) {
+      const text =
+        kind === 'steal'
+          ? `${A}に${this.loot(deed)}を盗まれた`
+          : kind === 'rob'
+            ? deed.success && (deed.item || deed.money)
+              ? `${A}に${this.loot(deed)}を力ずくで奪われた`
+              : `${A}に襲われ、物を奪われそうになった`
+            : kind === 'attack'
+              ? `${A}に殴られた`
+              : `${A}に殺されかけた`;
+      this.remember(victim, `${place}で${text}`);
+      this.feel(victim, actor, -VICTIM_GRUDGE[kind], `${this.clock.day}日目、${text}`);
+    }
+    for (const id of Object.keys(deed.knownBy)) {
+      if (deed.knownBy[id] !== 'saw') continue;
+      const w = this.get(id)!;
+      const text = deed.success || kind !== 'kill' ? `${A}が${B}${label}のを見た` : `${A}が${B}を殺そうとするのを見た`;
+      this.remember(w, `${place}で${text}`);
+      this.feel(w, actor, -WITNESS_GRUDGE[kind], `${this.clock.day}日目、${text}`);
+    }
+
+    // 盗まれたことに気づかなかった人は、しばらくしてから物が減っていることに気づく
+    if (kind === 'steal' && deed.success && !deed.knownBy[victim.profile.id]) {
+      const around = [actor, ...nearby].map((o) => o.profile.name);
+      this.pendingDiscoveries.push({ deedId: deed.id, at: this.clock.minutes + 30 + this.rng() * 90, nearby: shuffle(around, this.rng) });
+    }
+
+    if (deed.damage && !(kind === 'kill' && deed.success)) this.hurt(victim, deed.damage, actor, deed);
+    if (kind === 'kill' && deed.success) this.murder(victim, actor, deed);
+  }
+
+  /** 体力を減らす。0 になれば亡くなる */
+  private hurt(r: Resident, amount: number, by?: Resident, deed?: Deed) {
+    if (!this.residents.includes(r)) return;
+    r.health -= amount;
+    if (r.health > 0) return;
+    if (by && deed) this.murder(r, by, deed);
+    else this.die(r, 'けが');
+  }
+
+  private murder(victim: Resident, actor: Resident, deed: Deed) {
+    deed.success = true;
+    const known = Object.keys(deed.knownBy).some((id) => id !== victim.profile.id && this.get(id));
+    const name = victim.profile.name;
+    this.die(
+      victim,
+      '殺された',
+      known
+        ? `${name}が${deed.placeName}で${actor.profile.name}に殺された`
+        : `${name}が${deed.placeName}で死んでいるのが見つかった。誰かに殺されたらしい`,
+    );
+  }
+
+  /** 盗まれた人が、物が減っていることに気づく */
+  private discoverThefts() {
+    const now = this.clock.minutes;
+    for (const p of this.pendingDiscoveries.filter((p) => p.at <= now)) {
+      this.pendingDiscoveries.splice(this.pendingDiscoveries.indexOf(p), 1);
+      const deed = this.deeds.find((d) => d.id === p.deedId);
+      const victim = deed && this.get(deed.victimId);
+      if (!deed || !victim) continue;
+      const near = p.nearby.filter((n) => n !== victim.profile.name);
+      this.remember(
+        victim,
+        `${deed.time}ごろ${deed.placeName}にいたあと、${this.loot(deed)}がなくなっていた。誰かに盗まれたらしい。${near.length ? `そのころ近くにいたのは${near.join('、')}` : '近くには誰もいなかったはずだ'}`,
+      );
+      this.log(`${victim.profile.name}は${this.loot(deed)}がなくなっていることに気づいた`, 'life');
+    }
+  }
+
+  /** 広場で、誰かのことをみんなに言いふらす（本当かどうかは問わない） */
+  private accuse(r: Resident, task: Task) {
+    if (!task.purpose) return;
+    r.visited = { targetId: 'accuse', until: this.taskEnd(r, task) };
+    const target = task.target ? this.get(task.target) : undefined;
+    const text = `${r.profile.name}が広場で「${task.purpose}」と言いふらしている`;
+    this.announce(text, 'life');
+    for (const o of this.residents) if (o !== r) this.remember(o, text);
+    if (target) {
+      this.feel(target, r, -15, `${this.clock.day}日目、広場で自分のことを言いふらされた`);
+      // 言いふらした人が本当に知っていることなら、それは村じゅうに知れわたる
+      for (const d of this.deeds) {
+        if (d.actorId !== target.profile.id || !(d.knownBy[r.profile.id] || d.victimId === r.profile.id)) continue;
+        d.public = true;
+        for (const o of this.residents) {
+          if (o.profile.id !== d.actorId && !d.knownBy[o.profile.id]) d.knownBy[o.profile.id] = 'heard';
+        }
+      }
+    }
+  }
+
+  /** 会話で非行のことを話した：聞いた人もそれを知る */
+  addDisclosures(conv: Conversation, disclosures: { deedId: number; fromId: string; toId: string }[]): void {
+    for (const x of disclosures) {
+      const d = this.deeds.find((d) => d.id === x.deedId);
+      const from = this.get(x.fromId);
+      const to = this.get(x.toId);
+      if (!d || !from || !to || ![conv.a, conv.b].includes(from) || ![conv.a, conv.b].includes(to)) continue;
+      const fromKnows = d.actorId === from.profile.id || !!d.knownBy[from.profile.id];
+      if (!fromKnows || d.actorId === to.profile.id || d.knownBy[to.profile.id]) continue;
+      d.knownBy[to.profile.id] = 'heard';
+      const confessed = d.actorId === from.profile.id;
+      const act = d.kind === 'kill' && d.success ? `${d.victimName}を殺した` : `${d.victimName}${DEED_LABEL[d.kind]}`;
+      const text = confessed ? `${from.profile.name}が、自分が${act}と打ち明けた` : `${from.profile.name}から、${d.actorName}が${act}と聞いた`;
+      this.remember(to, text);
+      this.log(`${to.profile.name}は${text}`, 'crime', { conversationId: conv.id });
+      const actor = this.get(d.actorId);
+      if (actor && !confessed) this.feel(to, actor, -WITNESS_GRUDGE[d.kind] / 2, `${this.clock.day}日目、${d.actorName}が${act}と聞いた`);
+    }
+  }
+
+  /** その人が知っている、ほかの人の非行（本人がしたものは含まない） */
+  deedsKnownBy(r: Resident): Deed[] {
+    return this.deeds.filter((d) => d.actorId !== r.profile.id && (d.knownBy[r.profile.id] || (d.public && d.victimId !== r.profile.id)));
+  }
+
+  /** その人がしたこと（隠していること） */
+  deedsBy(r: Resident): Deed[] {
+    return this.deeds.filter((d) => d.actorId === r.profile.id);
+  }
+
   // ───────────── 出会いと会話 ─────────────
 
   private tryIndoorEncounter(r: Resident, place: Place) {
@@ -1497,7 +1960,15 @@ export class Simulation {
         const b = outside[j];
         if (a.conversation || b.conversation) continue;
         if (Math.hypot(a.x - b.x, a.y - b.y) > 1.1 || !this.canMeet(a, b)) continue;
-        if (a.action === 'visit' || b.action === 'visit') continue; // 会いに行く途中の人は approach で話しかける
+        // 会いに行く・何かしに行く途中の人は approach で相手に近づく
+        if (TARGETED_ACTIONS.includes(a.action as ActionId) || TARGETED_ACTIONS.includes(b.action as ActionId)) continue;
+        // 施しを求めている人は、通りかかった人に頼む
+        const beggar = a.action === 'beg' ? a : b.action === 'beg' ? b : null;
+        if (beggar) {
+          const other = beggar === a ? b : a;
+          this.startConversation(beggar, other, this.locationName(a), false, `${HUNGRY_PURPOSE}。通りかかった人に施しを求めている`);
+          continue;
+        }
         this.startConversation(a, b, this.locationName(a), false);
       }
     }
@@ -1529,6 +2000,7 @@ export class Simulation {
       [a, b],
       [b, a],
     ] as const) {
+      this.observe(self, other);
       self.conversation = conv;
       self.state = 'talking';
       if (other.x !== self.x) self.facing = other.x > self.x ? 1 : -1;
@@ -1596,6 +2068,7 @@ export class Simulation {
     if (conv.outcome && this.residents.includes(conv.a) && this.residents.includes(conv.b)) {
       this.applyOutcome(conv, conv.outcome);
       for (const ag of conv.outcome.agreements) this.carryOut(conv, ag);
+      if (conv.agreementsReady) this.checkRefusal(conv);
     }
     this.events.emit('conversationEnd', conv);
   }
@@ -1606,8 +2079,9 @@ export class Simulation {
       const self = ref.residentId === conv.a.profile.id ? conv.a : conv.b;
       const other = self === conv.a ? conv.b : conv.a;
       if (ref.memory) this.remember(self, ref.memory);
+      if (ref.reason && ref.affinityDelta !== 0) this.feel(self, other, ref.affinityDelta, `${this.clock.day}日目、${ref.reason}`);
       const rel = self.relations[other.profile.id] ?? defaultRelation();
-      rel.affinity = Math.max(-100, Math.min(100, rel.affinity + ref.affinityDelta));
+      if (!ref.reason) rel.affinity = Math.max(-100, Math.min(100, rel.affinity + ref.affinityDelta));
       if (ref.impression) rel.impression = ref.impression;
       self.relations[other.profile.id] = rel;
       const sign = ref.affinityDelta > 0 ? '+' : '';
@@ -1673,6 +2147,7 @@ export class Simulation {
         m.qty += qty;
         m.revenue += money;
         this.log(`${A}が${B}に${itemName}${qty}個を${money}Gで売った`, 'deal');
+        if (to === conv.a) conv.received = true;
         return;
       }
       case 'gift': {
@@ -1688,8 +2163,31 @@ export class Simulation {
           parts.push(`${money}G`);
         }
         if (parts.length === 0) return;
+        if (to === conv.a) conv.received = true;
         this.log(`${A}が${B}に${parts.join('と')}をあげた`, 'deal');
         this.feel(to, from, 6, `${this.clock.day}日目、${parts.join('と')}を分けてくれた`);
+        return;
+      }
+      case 'hush': {
+        // from が口止めを頼む人（払う人）、to が黙ると約束する人
+        const parts: string[] = [];
+        if (ag.item && qty > 0) {
+          if (countItem(from.inventory, ag.item) < qty) return fail(`${itemName}${qty}個で口止めする`, `${A}の${itemName}が足りなかった`);
+          moveItems(from.inventory, to.inventory, ag.item, qty, this.clock.minutes);
+          parts.push(`${itemName}${qty}個`);
+        }
+        if (money > 0) {
+          if (from.money < money) return fail(`${money}Gで口止めする`, `${A}のお金が足りなかった`);
+          moveMoney(from, to, money);
+          parts.push(`${money}G`);
+        }
+        const secrets = this.deeds.filter((d) => d.actorId === from.profile.id && d.knownBy[to.profile.id]);
+        for (const d of secrets) if (!d.hushed.includes(to.profile.id)) d.hushed.push(to.profile.id);
+        const fee = parts.length ? `（口止め料：${parts.join('と')}）` : '';
+        const about = ag.text || (secrets.length ? `${A}がしたこと` : `${A}のこと`);
+        this.log(`${B}は${A}に頼まれて「${about}」を黙っていると約束した${fee}`, 'crime', { conversationId: conv.id });
+        this.remember(from, `${B}に「${about}」を黙っていてもらう約束をした${fee}`);
+        this.remember(to, `${A}に頼まれて「${about}」を黙っていると約束した${fee}`);
         return;
       }
       case 'loan': {
@@ -1883,4 +2381,25 @@ function greetingLines(a: Resident, b: Resident, hour: number): DialogueLine[] {
     { speakerId: a.profile.id, text: `${b.profile.name}、${greet}` },
     { speakerId: b.profile.id, text: `${greet}` },
   ];
+}
+
+const clamp01 = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
+
+/** 並びをばらばらにする（「近くにいた人」の順番から犯人が分からないように） */
+function shuffle<T>(items: T[], rng: Rng): T[] {
+  const a = [...items];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/** はた目に見える様子 */
+export function looksOf(r: Resident): string {
+  if (r.health < 50) return 'ひどく弱っている';
+  if (r.satiety <= 0) return 'ひどくやつれている';
+  if (r.satiety < 30) return '腹を空かせている';
+  if (r.health < 80) return 'けがをしているか、少し弱っている';
+  return '元気そう';
 }

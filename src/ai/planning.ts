@@ -9,17 +9,19 @@ import {
   FISH_PER_HOUR,
   ITEM_IDS,
   ITEMS,
+  SATIETY_LOSS_AWAKE,
   SKILL_IDS,
   skillFactor,
+  STARVING_HEALTH_LOSS,
   SKILLS,
   type ItemId,
 } from '../world/economy';
 import { findWalkPath } from '../world/map';
-import { ACTIONS, DAILY_NEED, PLAN_ACTIONS, type ActionId, type DailyPlan, type PlanBlock } from '../world/planner';
+import { ACTIONS, DAILY_NEED, PLAN_ACTIONS, TARGETED_ACTIONS, type ActionId, type DailyPlan, type PlanBlock } from '../world/planner';
 import { SLEEP_FROM, WAKE_AT } from '../world/residents';
-import type { Resident, Simulation } from '../world/sim';
+import { HUNGRY_PURPOSE, type Resident, type Sighting, type Simulation } from '../world/sim';
 import type { ChatMessage } from './llm';
-import { affinityLabel, hungerLabel } from './prompt';
+import { affinityLabel, hungerLabel, knowledgeOf, secretsOf } from './prompt';
 import { topicNotice } from './topics';
 
 const RECENT_MEMORIES = 8;
@@ -68,6 +70,11 @@ function actionCatalog(sim: Simulation, r: Resident): string {
     beg: '広場で施しを求める（誰かが分けてくれるかもしれない）',
     wander: '広場をぶらついて、たまたま会った人と話す',
     rest: '何もしない',
+    steal: 'こっそり相手の持ち物（食べ物、なければお金）を半分ほど盗む。target に相手の名前。相手や近くにいる人に見られることがある',
+    rob: '相手から力ずくで持ち物を奪う。target に相手の名前。自分の体力が相手より多いほど成功しやすい。相手には必ず知られる',
+    attack: '相手を殴って体力を大きく減らす。target に相手の名前。体力が0になった人は死ぬ。相手には必ず知られる',
+    kill: '相手を殺す。target に相手の名前。自分の体力が相手より多いほど、相手が弱っているほど成功しやすい。失敗すると相手は傷を負って逃げる',
+    accuse: '広場で、ある人のことを村のみんなに言いふらす（本当のことでも嘘でもよい）。target に相手の名前、purpose に言いふらす中身',
   };
   return PLAN_ACTIONS.map((a) => {
     const place = ACTIONS[a].place === 'home' ? '自分の家' : ACTIONS[a].place;
@@ -121,6 +128,23 @@ function facilityReport(sim: Simulation): string {
     .join('\n');
 }
 
+/** 人の様子と持ち物は、最後に会ったときに見た分しか分からない */
+function sighting(sim: Simulation, self: Resident, other: Resident, withinDays = 2): Sighting | null {
+  const s = self.seen?.[other.profile.id];
+  return s && sim.clock.minutes - s.at <= withinDays * 1440 ? s : null;
+}
+
+function when(sim: Simulation, s: Sighting): string {
+  const d = sim.clock.day - s.day;
+  return d === 0 ? `今日の${s.time}` : d === 1 ? `昨日の${s.time}` : `${s.day}日目`;
+}
+
+function sightingText(sim: Simulation, self: Resident, other: Resident): string {
+  const s = self.seen?.[other.profile.id];
+  if (!s) return 'まだ顔を合わせていないので、様子は分からない';
+  return `${when(sim, s)}に会ったときは${s.looks}で、${s.food ? `${s.food}を持っていた` : '食べ物は持っていなかった'}`;
+}
+
 function othersReport(sim: Simulation, self: Resident): string {
   const others = sim.residents.filter((o) => o !== self);
   if (others.length === 0) return '- 誰もいない';
@@ -129,10 +153,7 @@ function othersReport(sim: Simulation, self: Resident): string {
       const rel = self.relations[o.profile.id];
       const feel = rel ? `あなたの気持ち: ${affinityLabel(rel.affinity)}（${rel.affinity}）「${rel.impression}」` : '';
       const why = rel?.notes?.length ? `（理由: ${rel.notes.slice(0, 2).map((n) => n.text).join('／')}）` : '';
-      const looks = o.satiety <= 0 ? 'ひどくやつれている' : o.satiety < 30 ? '腹を空かせている' : '元気そう';
-      const food = foodValue(o.inventory);
-      const stock = food >= DAILY_NEED * 2 ? '、食べ物をたくさん抱えている' : food === 0 ? '、食べ物を何も持っていない' : '';
-      return `- ${o.profile.name}: 仕事「${o.occupation || 'なし'}」、今日は${mainActivities(o)}。${looks}${stock}。${feel}${why}`;
+      return `- ${o.profile.name}: 仕事「${o.occupation || 'なし'}」、今日は${mainActivities(o)}。${sightingText(sim, self, o)}。${feel}${why}`;
     })
     .join('\n');
 }
@@ -179,6 +200,16 @@ function ties(sim: Simulation, r: Resident): string[] {
     }
   }
   return lines;
+}
+
+/** 自分がしたこと（隠していること）と、人のしたことで知っていること */
+function deedSections(sim: Simulation, r: Resident): string[] {
+  const mine = secretsOf(sim, r);
+  const known = knowledgeOf(sim, r);
+  return [
+    ...(mine.length ? ['', '自分がしたことで、隠していること:', ...mine.map((l) => `- ${l}`)] : []),
+    ...(known.length ? ['', '人のしたことで、知っていること:', ...known.map((l) => `- ${l}`)] : []),
+  ];
 }
 
 /** 家から各場所まで歩いて何分か（1分に1マス歩く） */
@@ -278,16 +309,26 @@ function opportunities(sim: Simulation, r: Resident): string[] {
   const surplus = ITEM_IDS.filter((id) => ITEMS[id].satiety > 0 && sim.sellable(r, id) > 0).map(
     (id) => `${ITEMS[id].name}${sim.sellable(r, id)}`,
   );
-  const short = others.filter((o) => foodValue(o.inventory) < DAILY_NEED / 2 || o.satiety < 30).map((o) => o.profile.name);
+  // 自分が見た範囲で
+  const short = others
+    .filter((o) => {
+      const s = sighting(sim, r, o, 1);
+      return s && (s.foodValue < DAILY_NEED / 2 || /空かせ|やつれ|弱って/.test(s.looks));
+    })
+    .map((o) => o.profile.name);
   if (surplus.length > 0 && short.length > 0) {
     lines.push(`あなたは自分が食べる分より多く食べ物を持っている（余り: ${surplus.join('・')}）。一方、食べ物が足りていない人がいる: ${short.join('、')}`);
   }
   if (foodValue(r.inventory) < DAILY_NEED) {
     const rich = others
-      .map((o) => ({ o, extra: ITEM_IDS.filter((id) => ITEMS[id].satiety > 0 && sim.sellable(o, id) > 0) }))
-      .filter((x) => x.extra.length > 0)
-      .map((x) => `${x.o.profile.name}（${x.extra.map((id) => `${ITEMS[id].name}${sim.sellable(x.o, id)}`).join('・')}）`);
-    lines.push(rich.length > 0 ? `食べ物を余らせている人: ${rich.join('、')}` : '村には食べ物を余らせている人がいない');
+      .map((o) => ({ o, s: sighting(sim, r, o) }))
+      .filter((x) => x.s && x.s.foodValue >= DAILY_NEED * 1.5)
+      .map((x) => `${x.o.profile.name}（${when(sim, x.s!)}に${x.s!.food}を持っていた）`);
+    lines.push(
+      rich.length > 0
+        ? `最近会った人のうち、食べ物をたくさん持っていた人: ${rich.join('、')}`
+        : '最近会った人の中に、食べ物をたくさん持っていた人はいない',
+    );
   }
   return lines;
 }
@@ -345,7 +386,8 @@ const PLAN_SYSTEM = `あなたは小さな村に暮らす村人本人です。�
 ## 決め方
 - 行動は一覧から選ぶ。時間割は${WAKE_AT}〜${SLEEP_FROM}時の範囲で、重ならないように4〜8個のまとまりで並べる。
 - 材料が要る行動（パン焼き・料理）は、材料を手に入れる行動のあとに置く。売る物がないのに sell を入れない。
-- prices は sell のときだけ書く。visit のときは target に相手の名前、purpose に用件を書く。
+- prices は sell のときだけ書く。visit のときは target に相手の名前、purpose に用件を書く。steal・rob・attack・kill は target に相手の名前、accuse は target と purpose を書く。
+- 人の物を盗む・奪う・傷つけることもできる。それをするかどうか、どう考えるかは自分しだい。したことは誰かに見られているかもしれない。
 - 自分の自己像・状態・腕前・記憶・村の人たち・市場の様子をよく見て、自分にとっていちばんいいと思う計画を立てる。他の人の役に立つことを考えてもいいし、自分のことだけを考えてもいい。
 - 本音は取り繕わずに書く。不安・不満・嫉妬・恨みがあればそのまま書いてよい。
 - 仕事は名乗っても名乗らなくてもいい。続けていることに合わせて名乗る、変える、やめる。名乗らないなら空文字。
@@ -370,6 +412,7 @@ export function buildPlanMessages(sim: Simulation, r: Resident, day: number): Ch
     '',
     '貸し借り・雇用:',
     ...(ties(sim, r).map((t) => `- ${t}`).concat(ties(sim, r).length === 0 ? ['- なし'] : [])),
+    ...deedSections(sim, r),
     '',
     '村の人たち:',
     othersReport(sim, r),
@@ -444,10 +487,13 @@ export function parsePlan(raw: RawPlan, day: number, current: Resident, sim: Sim
   const blocks: PlanBlock[] = (raw.blocks ?? [])
     .filter((b) => PLAN_ACTIONS.includes(b.action as ActionId))
     .map((b) => {
-      // 会いに行く相手が村にいなければ、ぶらつくことにする
-      const target = b.action === 'visit' ? byName.get(String(b.target ?? '').trim()) : undefined;
-      const action = (b.action === 'visit' && (!target || target === current.profile.id) ? 'wander' : b.action) as ActionId;
-      const purpose = clean(b.purpose, 40);
+      // 相手の要る行動で、相手が村にいなければ、ぶらつくことにする
+      const targeted = TARGETED_ACTIONS.includes(b.action as ActionId) || b.action === 'accuse';
+      const target = targeted ? byName.get(String(b.target ?? '').trim()) : undefined;
+      const purpose = clean(b.purpose, 60);
+      const missing =
+        b.action === 'accuse' ? !purpose || hasForeignWords(purpose) : targeted && (!target || target === current.profile.id);
+      const action = (missing ? 'wander' : b.action) as ActionId;
       const prices: Partial<Record<ItemId, number>> = {};
       for (const id of ITEM_IDS) {
         const p = Math.round(Number(b.prices?.[id]));
@@ -458,7 +504,9 @@ export function parsePlan(raw: RawPlan, day: number, current: Resident, sim: Sim
         to: clamp(Number(b.to), WAKE_AT, SLEEP_FROM),
         action,
         ...(Object.keys(prices).length > 0 ? { prices } : {}),
-        ...(action === 'visit' ? { target, purpose: hasForeignWords(purpose) ? '' : purpose } : {}),
+        ...(TARGETED_ACTIONS.includes(action) || action === 'accuse'
+          ? { target: target === current.profile.id ? undefined : target, purpose: hasForeignWords(purpose) ? '' : purpose }
+          : {}),
       };
     })
     .filter((b) => Number.isFinite(b.from) && Number.isFinite(b.to) && b.to - b.from >= 0.25)
@@ -607,7 +655,7 @@ export interface RawCrisis {
   purpose: string;
 }
 
-const CRISIS_ACTIONS = ['visit', 'beg', 'buy', 'farm', 'fish', 'bake', 'rest'] as const;
+const CRISIS_ACTIONS = ['visit', 'beg', 'buy', 'farm', 'fish', 'bake', 'steal', 'rob', 'rest'] as const;
 
 const CRISIS_SYSTEM = `あなたは小さな村に暮らす村人本人です。いま空腹で、食べる物を何も持っていません。このままだと体力が減り、やがて死にます。
 これからの1〜2時間で、どうやって食べ物を手に入れるかを1つ選びます。ほかの用事は、食べ物を手に入れてからにする。
@@ -616,13 +664,25 @@ const CRISIS_SYSTEM = `あなたは小さな村に暮らす村人本人です。
 - buy: 市場で買う（店を開いている人がいるときだけ意味がある）
 - farm / fish: 自分で採りに行く（すぐには食べられる量にならないかもしれない）
 - bake: 持っている小麦でパンを焼く
+- steal: 食べ物を持っている人から、こっそり盗む（target に名前。見つかることもある）
+- rob: 食べ物を持っている人から、力ずくで奪う（target に名前。相手には必ず知られる。体力が相手より多いほど成功しやすい）
 - rest: 何もしない（あきらめる）
 自分の自己像・人間関係・所持金・記憶から、自分らしく選ぶ。プライドを捨てて頼ってもいいし、嫌いな人には頼らなくてもいい。
 thought に本音を一人称で60文字以内で書く。日本語で書く。出力はJSONのみ。`;
 
-/** 食べ物を持っている人と、その中身（食べる分も含めて見える範囲で） */
+/** このまま何も食べなければ、いつ死ぬか（本人の体で分かる事実） */
+function timeLeft(r: Resident): string {
+  const toStarve = r.satiety / (SATIETY_LOSS_AWAKE * 60);
+  const toDeath = Math.max(0, r.health) / (STARVING_HEALTH_LOSS * 60);
+  const total = Math.round(toStarve + toDeath);
+  return toStarve > 0.5
+    ? `このまま何も食べなければ、あと約${Math.round(toStarve)}時間で飢え始め、そこから約${Math.round(toDeath)}時間で死ぬ（合わせて約${total}時間）`
+    : `もう飢えている。このまま何も食べなければ、あと約${total}時間で死ぬ`;
+}
+
+/** 最近会ったときに食べ物を持っていた人（本人が知っている範囲。今も持っているとは限らない） */
 function foodHolders(sim: Simulation, r: Resident): Resident[] {
-  return sim.residents.filter((o) => o !== r && foodValue(o.inventory) > 0);
+  return sim.residents.filter((o) => o !== r && (sighting(sim, r, o)?.foodValue ?? 0) > 0);
 }
 
 export function buildCrisisMessages(sim: Simulation, r: Resident): ChatMessage[] {
@@ -630,20 +690,20 @@ export function buildCrisisMessages(sim: Simulation, r: Resident): ChatMessage[]
     .filter((o) => o !== r && o.shop)
     .map((o) => o.profile.name);
   const holders = foodHolders(sim, r).map((o) => {
+    const s = sighting(sim, r, o)!;
     const rel = r.relations[o.profile.id];
-    const foods = ITEM_IDS.filter((id) => ITEMS[id].satiety > 0 && countItem(o.inventory, id) > 0)
-      .map((id) => `${ITEMS[id].name}${countItem(o.inventory, id)}`)
-      .join('・');
-    return `- ${o.profile.name}: ${foods}${rel ? `（あなたの気持ち: ${affinityLabel(rel.affinity)}）` : ''}`;
+    return `- ${o.profile.name}: ${when(sim, s)}に会ったとき${s.food}を持っていた。${s.looks}${rel ? `（あなたの気持ち: ${affinityLabel(rel.affinity)}）` : ''}`;
   });
   const user = [
     aboutMe(r),
+    `残された時間: ${timeLeft(r)}`,
     '',
     '貸し借り・雇用:',
     ...(ties(sim, r).map((t) => `- ${t}`).concat(ties(sim, r).length === 0 ? ['- なし'] : [])),
+    ...deedSections(sim, r),
     '',
-    '食べ物を持っている人:',
-    ...(holders.length > 0 ? holders : ['- 誰もいない']),
+    '最近会ったときに食べ物を持っていた人（今も持っているとは限らない）:',
+    ...(holders.length > 0 ? holders : ['- 思い当たる人がいない']),
     '',
     `いま市場で店を開いている人: ${sellers.length > 0 ? sellers.join('、') : 'いない'}`,
     sim.describeWeather('now'),
@@ -676,6 +736,11 @@ export function parseCrisis(
   const thought = hasForeignWords(clean(raw.thought, 80)) ? '' : clean(raw.thought, 80);
   const action = (CRISIS_ACTIONS as readonly string[]).includes(raw.action) ? (raw.action as ActionId) : 'fish';
   const fallback = (): ActionId => (r.money > 0 && sim.residents.some((o) => o !== r && o.shop) ? 'buy' : 'beg');
+  if (action === 'steal' || action === 'rob') {
+    const t = foodHolders(sim, r).find((o) => o.profile.name === String(raw.target ?? '').trim());
+    if (t) return { action, target: t.profile.id, thought };
+    return { action: fallback(), thought };
+  }
   if (action === 'visit') {
     // 食べ物を持っていない人を訪ねても飢えはしのげない
     const t = foodHolders(sim, r).find((o) => o.profile.name === String(raw.target ?? '').trim());
@@ -684,7 +749,7 @@ export function parseCrisis(
     return {
       action,
       target: t.profile.id,
-      purpose: `食べる物がなくて困っている。${purpose && !hasForeignWords(purpose) ? purpose : '食べ物を分けてほしい'}`,
+      purpose: `${HUNGRY_PURPOSE}。${purpose && !hasForeignWords(purpose) ? purpose : '食べ物を分けてほしい'}`,
       thought,
     };
   }

@@ -19,8 +19,8 @@ const PREFERRED_MODELS = [
 const isReasoningModel = (name: string) => /(^|[-_:/])r1|deepseek-r1|R1-Distill/i.test(name);
 const isEmbeddingModel = (name: string) => /embed/i.test(name);
 
-/** 1回のリクエストを待つ上限 */
-const REQUEST_TIMEOUT_MS = 150_000;
+/** 1回のリクエストを待つ上限（打ち切りは Ollama の負担になるので、よほどのときだけ） */
+const REQUEST_TIMEOUT_MS = 300_000;
 /** 接続が切れたあと、つなぎ直すまでの間 */
 const RECONNECT_DELAY_MS = 5_000;
 
@@ -28,10 +28,11 @@ export class OllamaClient {
   status: LlmStatus = 'connecting';
   model: string | null = null;
   /**
-   * 同時に投げてよいリクエスト数。Ollama は並列リクエストをまとめて処理するので、
-   * 1件ずつより数件まとめたほうが全体では速い（M2で4件同時なら約2倍）。
+   * 同時に投げてよいリクエスト数。Ollama 0.32 は1件ずつ処理する（-np 1）ので、
+   * 多く投げても順番待ちが伸びるだけ。待ちきれずに打ち切ったリクエストが溜まると Ollama が固まることがあるので、
+   * 次の1件を待たせておく程度にとどめる。
    */
-  readonly maxParallel = 3;
+  readonly maxParallel = 2;
   /** 応答待ちのリクエスト数 */
   private inFlight = 0;
 

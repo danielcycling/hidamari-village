@@ -7,6 +7,7 @@ import {
   type DayRecord,
   type DayStats,
   type Debt,
+  type Deed,
   type Delivery,
   type Employment,
   type Estate,
@@ -15,6 +16,7 @@ import {
   type LogEntry,
   type MarketDay,
   type Memory,
+  type PendingDiscovery,
   type News,
   type Simulation,
   type WeatherKind,
@@ -62,6 +64,9 @@ export interface SaveData {
   employments?: Employment[];
   deliveries?: Delivery[];
   dealSeq?: number;
+  deeds?: Deed[];
+  deedSeq?: number;
+  pendingDiscoveries?: PendingDiscovery[];
   news: News[];
   weather: { kind: WeatherKind; until: number };
   dayWeather?: WeatherKind;
@@ -112,6 +117,9 @@ export function serialize(sim: Simulation, autoGod: boolean): SaveData {
     employments: sim.employments,
     deliveries: sim.deliveries,
     dealSeq: sim.dealSeq,
+    deeds: sim.deeds,
+    deedSeq: sim.deedSeq,
+    pendingDiscoveries: sim.pendingDiscoveries,
     news: sim.news,
     weather: sim.weather,
     dayWeather: sim.dayWeather,
@@ -181,6 +189,9 @@ export function restore(sim: Simulation, data: SaveData): void {
   replace(sim.employments, data.employments ?? []);
   replace(sim.deliveries, data.deliveries ?? []);
   sim.dealSeq = data.dealSeq ?? 0;
+  replace(sim.deeds, data.deeds ?? []);
+  sim.deedSeq = data.deedSeq ?? 0;
+  replace(sim.pendingDiscoveries, data.pendingDiscoveries ?? []);
   replace(sim.news, data.news);
   sim.weather = data.weather;
   sim.dayWeather = data.dayWeather ?? (data.weather.until > 0 ? 'clear' : data.weather.kind);

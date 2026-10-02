@@ -16,6 +16,11 @@ export interface GodPreset {
 
 export const PRESETS: GodPreset[] = [
   { id: 'rain', icon: '☔', label: '雨を降らせる', run: (sim) => sim.startRain(5) },
+  { id: 'storm', icon: '⛈', label: '嵐を起こす', run: (sim) => sim.startStorm(6) },
+  { id: 'drought', icon: '🌵', label: '日照りにする', run: (sim) => sim.startCondition('drought') },
+  { id: 'poor_catch', icon: '🎣', label: '不漁にする', run: (sim) => sim.startCondition('poor_catch') },
+  { id: 'bounty', icon: '🌾', label: '豊作にする', run: (sim) => sim.startCondition('bounty') },
+  { id: 'good_catch', icon: '🐟', label: '豊漁にする', run: (sim) => sim.startCondition('good_catch') },
   {
     id: 'festival',
     icon: '🏮',
@@ -107,6 +112,11 @@ export class AutoGod {
     if (roll < 0.12 && sim.weather.kind !== 'rain' && sim.weather.kind !== 'storm') return preset('rain').run(sim);
     if (roll < 0.22 && sim.clock.hourOfDay < 16 && !this.hasUpcomingGathering()) {
       return preset('festival').run(sim);
+    }
+    // ときどき、村の暮らしを揺さぶる出来事を起こす（良いことも悪いことも）
+    if (roll < 0.3 && sim.conditions.length === 0) {
+      const kinds = ['drought', 'poor_catch', 'bounty', 'good_catch'] as const;
+      return preset(kinds[Math.floor(Math.random() * kinds.length)]).run(sim);
     }
     if (this.llm.status === 'ready') {
       try {

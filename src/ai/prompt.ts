@@ -1,6 +1,6 @@
 import { describeInventory, foodValue, ITEM_IDS, ITEMS, SKILL_IDS, SKILLS } from '../world/economy';
 import { ACTIONS, DAILY_NEED, WORK_ACTIONS } from '../world/planner';
-import type { Resident, Simulation } from '../world/sim';
+import type { Deed, Resident, Simulation } from '../world/sim';
 import type { ChatMessage } from './llm';
 import { topicNotice } from './topics';
 
@@ -44,7 +44,52 @@ export interface RawAgreement {
   quote?: string;
 }
 
-export const AGREEMENT_TYPES = ['trade', 'gift', 'loan', 'repay', 'hire', 'quit', 'teach', 'promise'] as const;
+export const AGREEMENT_TYPES = ['trade', 'gift', 'loan', 'repay', 'hire', 'quit', 'teach', 'promise', 'hush'] as const;
+
+// ───────────── 隠していること・知っていること ─────────────
+
+const DEED_TEXT: Record<Deed['kind'], (d: Deed) => string> = {
+  steal: (d) => (d.success ? `${d.victimName}から${loot(d)}をこっそり盗んだ` : `${d.victimName}から盗もうとした`),
+  rob: (d) => (d.success && loot(d) ? `${d.victimName}から${loot(d)}を力ずくで奪った` : `${d.victimName}から力ずくで奪おうとした`),
+  attack: (d) => `${d.victimName}を殴った`,
+  kill: (d) => (d.success ? `${d.victimName}を殺した` : `${d.victimName}を殺そうとした`),
+};
+
+function loot(d: Deed): string {
+  if (d.item) return `${ITEMS[d.item].name}${d.qty}個`;
+  if (d.money) return `${d.money}G`;
+  return '';
+}
+
+/** 自分がしたこと（隠していること）。番号つき */
+export function secretsOf(sim: Simulation, r: Resident): string[] {
+  return sim.deedsBy(r).slice(-5).map((d) => {
+    const seen = d.actorSawWitness.map((id) => sim.get(id)?.profile.name).filter(Boolean);
+    const hushed = d.hushed.map((id) => sim.get(id)?.profile.name).filter(Boolean);
+    const known = d.public
+      ? '村じゅうに知れわたっている'
+      : seen.length
+        ? `${seen.join('、')}に見られた`
+        : '誰にも見られていないと思う';
+    return `[#${d.id}] ${d.day}日目 ${d.time} ${d.placeName}で${DEED_TEXT[d.kind](d)}（${known}${hushed.length ? `。${hushed.join('、')}は黙ると約束した` : ''}）`;
+  });
+}
+
+/** 人がしたことで、自分が知っていること。番号つき */
+export function knowledgeOf(sim: Simulation, r: Resident): string[] {
+  return sim.deedsKnownBy(r).slice(-5).map((d) => {
+    const how = d.knownBy[r.profile.id];
+    const act = `${d.actorName}が${DEED_TEXT[d.kind](d)}`;
+    const text =
+      how === 'victim'
+        ? `${d.actorName}にやられた：${act}`
+        : how === 'saw'
+          ? `自分の目で見た：${act}`
+          : `人から聞いた：${act}`;
+    const promised = d.hushed.includes(r.profile.id) ? '（黙っていると約束した）' : '';
+    return `[#${d.id}] ${d.day}日目 ${d.placeName}。${text}${d.public ? '（村じゅうが知っている）' : ''}${promised}`;
+  });
+}
 
 const SYSTEM_PROMPT = `あなたは小さな村「ひだまり村」の観察記録係です。
 村人2人がばったり出会った場面の会話を書いてください。
@@ -118,6 +163,8 @@ function between(sim: Simulation, self: Resident, other: Resident): string[] {
   return lines;
 }
 
+const section = (title: string, lines: string[]) => (lines.length ? [`${title}:`, ...lines.map((l) => `- ${l}`)] : []);
+
 function describe(sim: Simulation, self: Resident, other: Resident): string {
   const p = self.profile;
   const rel = self.relations[other.profile.id];
@@ -132,6 +179,8 @@ function describe(sim: Simulation, self: Resident, other: Resident): string {
     `今していること: ${self.activity}`,
     `${other.profile.name}への気持ち: 好感度 ${rel.affinity}（${affinityLabel(rel.affinity)}）／印象「${rel.impression}」`,
     ...between(sim, self, other),
+    ...section('自分がしたことで、隠していること（話すかどうかは自分しだい）', secretsOf(sim, self)),
+    ...section('人のしたことで、知っていること（話すかどうかは自分しだい）', knowledgeOf(sim, self)),
     `最近の記憶:`,
     ...(memories.length > 0 ? memories.map((m) => `- ${m.day}日目 ${m.time}: ${m.text}`) : ['- 特になし']),
     ...[topicNotice(memories.map((m) => m.text))].filter(Boolean),
@@ -208,6 +257,9 @@ const AGREEMENT_SYSTEM = `あなたは村の記録係です。村人2人の会�
 - 会話の中で物を「もらう」「分けてもらう」「借りる」と決まったら gift（品物）。あとで返す約束もしていれば、それは promise として別に書く。
 - お金の貸し借りは loan、借りたお金を返すのは repay。代金を払って物を受け取るのは trade。
 - 「手伝う」「明日〜する」のような、その場では何も動かない約束は promise。
+- 誰かに、自分のしたことを黙っていてもらう約束がまとまったら hush（from=黙っていてほしい人、to=黙ると約束した人。口止め料があれば item・qty・money）。
+- feelings には、それぞれの人物がこの会話のあと相手をどう感じたか（change は -15〜+15）と、その理由（reason、30文字以内）を書く。言葉が丁寧でも、頼みを断られた・損をさせられた・約束を破られた・見下された・相手だけが得をしたなら下がる。実際に助けられた・得をしたなら上がる。何も起きなければ 0。2人の状況（飢えているか、持っているか）も踏まえて、人間らしく冷静に判断する。
+- disclosures には、会話の中で番号つきの出来事（[#番号]）について相手に話したものを書く（deed=番号、from=話した人、to=聞いた人）。ほのめかしただけ・話さなかったものは書かない。
 - 持っていない物やお金は渡せない。持ち物と所持金をよく見る。
 - quote には、そのやりとりが決まった根拠のセリフを会話からそのまま抜き出す。品物の名前や数・金額が、会話の中で実際に言われていなければ書かない（数を自分で補わない）。
 - 何もまとまっていなければ、agreements は空の配列にする。
@@ -220,16 +272,26 @@ export function buildAgreementMessages(
 ): ChatMessage[] {
   const who = (r: Resident) =>
     `${r.profile.name}: 所持金${r.money}G、持ち物 ${describeInventory(r.inventory)}、腕前 ${SKILL_IDS.map((s) => `${SKILLS[s]}${Math.round(r.skills[s])}`).join('・')}`;
+  const deeds = [ctx.a, ctx.b].flatMap((r) => [
+    ...secretsOf(ctx.sim, r).map((l) => `${r.profile.name}がしたこと ${l}`),
+    ...knowledgeOf(ctx.sim, r).map((l) => `${r.profile.name}が知っていること ${l}`),
+  ]);
+  const state = (r: Resident) =>
+    `${r.profile.name}の状態: ${hungerLabel(r.satiety)}、体力${Math.round(r.health)}${foodValue(r.inventory) === 0 ? '、食べ物を何も持っていない' : ''}`;
   const user = [
     who(ctx.a),
     who(ctx.b),
+    state(ctx.a),
+    state(ctx.b),
+    ...(ctx.purpose ? [`${ctx.a.profile.name}は「${ctx.purpose}」という用で会いに来た`] : []),
+    ...(deeds.length ? ['', '番号つきの出来事:', ...deeds.map((d) => `- ${d}`)] : []),
     '',
     '会話:',
     ...lines.map((l) => `${l.speaker}「${l.text}」`),
     '',
     `まとめ: ${summary}`,
     '',
-    `agreements の書き方: type は ${AGREEMENT_TYPES.join('/')}。trade は from=売る人・to=買う人・item・qty・money=代金の合計。gift は from=あげる人・to=もらう人・item と qty、または money。loan は from=貸す人・to=借りる人・money・days=返すまでの日数。repay は from=返す人・to=貸した人・money。hire は from=雇う人・to=雇われる人・work=仕事（${WORK_ACTIONS.map((w) => `${w}=${ACTIONS[w].label}`).join('、')}）・money=日給・days=日数。quit は from=辞める人・to=雇い主。teach は from=教える人・to=教わる人・work=教える仕事（その場で教える。教える人のほうが上手でないと効果はない）。promise は from=約束する人・to=相手・text=約束の中身。品物の item は ${ITEM_IDS.map((id) => `${id}=${ITEMS[id].name}`).join('、')}。`,
+    `agreements の書き方: type は ${AGREEMENT_TYPES.join('/')}。trade は from=売る人・to=買う人・item・qty・money=代金の合計。gift は from=あげる人・to=もらう人・item と qty、または money。loan は from=貸す人・to=借りる人・money・days=返すまでの日数。repay は from=返す人・to=貸した人・money。hush は from=黙っていてほしい人・to=黙ると約束した人・口止め料があれば item・qty・money。hire は from=雇う人・to=雇われる人・work=仕事（${WORK_ACTIONS.map((w) => `${w}=${ACTIONS[w].label}`).join('、')}）・money=日給・days=日数。quit は from=辞める人・to=雇い主。teach は from=教える人・to=教わる人・work=教える仕事（その場で教える。教える人のほうが上手でないと効果はない）。promise は from=約束する人・to=相手・text=約束の中身。品物の item は ${ITEM_IDS.map((id) => `${id}=${ITEMS[id].name}`).join('、')}。`,
   ].join('\n');
   return [
     { role: 'system', content: AGREEMENT_SYSTEM },
@@ -262,7 +324,34 @@ export function buildAgreementSchema(ctx: ConversationContext): object {
           required: ['type', 'quote', 'from', 'to'],
         },
       },
+      feelings: {
+        type: 'object',
+        properties: Object.fromEntries(
+          names.map((n) => [
+            n,
+            {
+              type: 'object',
+              properties: { change: { type: 'integer', minimum: -15, maximum: 15 }, reason: { type: 'string' } },
+              required: ['change', 'reason'],
+            },
+          ]),
+        ),
+        required: names,
+      },
+      disclosures: {
+        type: 'array',
+        maxItems: 4,
+        items: {
+          type: 'object',
+          properties: {
+            deed: { type: 'integer' },
+            from: { type: 'string', enum: names },
+            to: { type: 'string', enum: names },
+          },
+          required: ['deed', 'from', 'to'],
+        },
+      },
     },
-    required: ['agreements'],
+    required: ['agreements', 'feelings', 'disclosures'],
   };
 }

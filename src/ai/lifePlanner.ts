@@ -111,7 +111,13 @@ export class LifePlanner {
 
   private onEvening(day: number) {
     if (this.llm.status !== 'ready') return;
-    const planJobs: Job[] = this.sim.residents.map((r) => ({ kind: 'plan', residentId: r.profile.id, day: day + 1 }));
+    // 朝までに間に合わないと残りはルールの計画になるので、前の晩に間に合わなかった人
+    // （新しく来た人を含む）から先に考える。あとは毎晩順番を回して、いつも同じ人が後回しにならないようにする
+    const n = this.sim.residents.length;
+    const order = this.sim.residents
+      .map((r, i) => ({ r, late: r.plan?.source === 'ai' ? 1 : 0, turn: (i + day) % Math.max(1, n) }))
+      .sort((a, b) => a.late - b.late || a.turn - b.turn);
+    const planJobs: Job[] = order.map(({ r }) => ({ kind: 'plan', residentId: r.profile.id, day: day + 1 }));
     this.queue.push(...planJobs);
     this.progress = { day: day + 1, total: planJobs.length, done: 0 };
   }
@@ -138,10 +144,17 @@ export class LifePlanner {
       } else if (job.kind === 'crisis') {
         const raw = await this.llm.chatJSON<RawCrisis>(buildCrisisMessages(this.sim, r), crisisSchema);
         const c = parseCrisis(raw, r, this.sim);
-        const minutes = c.action === 'visit' ? 120 : c.action === 'buy' ? 60 : 90;
+        const minutes = c.target ? 120 : c.action === 'buy' ? 60 : 90;
         this.sim.setOverride(r, { action: c.action, target: c.target, purpose: c.purpose, minutes });
         const who = c.target ? this.sim.get(c.target)?.profile.name : '';
-        const what = c.action === 'visit' ? `${who}に会いに行くことにした（${c.purpose}）` : `${ACTION_LABELS[c.action]}ことにした`;
+        const what =
+          c.action === 'visit'
+            ? `${who}に会いに行くことにした（${c.purpose}）`
+            : c.action === 'steal'
+              ? `${who}から食べ物を盗むことにした`
+              : c.action === 'rob'
+                ? `${who}から食べ物を力ずくで奪うことにした`
+                : `${ACTION_LABELS[c.action]}ことにした`;
         this.sim.log(`${r.profile.name}は飢えに追い詰められ、${what}${c.thought ? `「${c.thought}」` : ''}`, 'life');
         if (c.thought) this.sim.remember(r, `飢えに追い詰められて思ったこと：「${c.thought}」`);
       } else {

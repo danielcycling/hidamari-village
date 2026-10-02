@@ -1,4 +1,4 @@
-import { hungerLabel } from '../ai/prompt';
+import { hungerLabel, knowledgeOf, secretsOf } from '../ai/prompt';
 import { countItem, ITEM_IDS, ITEMS, SKILL_IDS, SKILLS } from '../world/economy';
 import { ACTIONS } from '../world/planner';
 import type { Resident, Simulation } from '../world/sim';
@@ -34,6 +34,7 @@ export class Inspector {
       this.plan(r),
       this.belongings(r),
       this.ties(r),
+      this.deeds(r),
       this.feelings(r),
       this.memories(r),
     );
@@ -168,6 +169,31 @@ export class Inspector {
       for (const l of lines) list.append(el('li', '', l));
       section.append(list);
     }
+    return section;
+  }
+
+  /** 隠していることと、知っていること（神の視点では、誰が知っているかも見える） */
+  private deeds(r: Resident): HTMLElement {
+    const section = el('section');
+    section.append(el('h4', '', '隠していること・知っていること'));
+    const mine = this.sim.deedsBy(r);
+    const known = knowledgeOf(this.sim, r);
+    if (mine.length === 0 && known.length === 0) {
+      section.append(el('p', 'mind-empty', 'なし'));
+      return section;
+    }
+    const list = el('ul', 'ties deeds');
+    secretsOf(this.sim, r).forEach((line, i) => {
+      const d = mine.slice(-5)[i];
+      const who = Object.keys(d.knownBy)
+        .map((id) => this.sim.get(id)?.profile.name)
+        .filter(Boolean);
+      const li = el('li', 'secret', `隠している ${line}`);
+      li.append(el('span', 'deed-truth', `　本当に知っている人：${who.length ? who.join('、') : '誰もいない'}`));
+      list.append(li);
+    });
+    for (const line of known) list.append(el('li', '', `知っている ${line}`));
+    section.append(list);
     return section;
   }
 

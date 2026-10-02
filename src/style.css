@@ -929,3 +929,17 @@ body {
 .log-deal span {
   color: #ffd98a;
 }
+
+/* ───────────── 非行と暴力（神の視点） ───────────── */
+.log-crime span {
+  color: #e07fd6;
+}
+
+.deeds li.secret {
+  color: #e07fd6;
+}
+
+.deed-truth {
+  color: var(--muted);
+  font-size: 11px;
+}
