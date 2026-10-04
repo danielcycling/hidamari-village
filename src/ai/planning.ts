@@ -280,7 +280,13 @@ function deedSections(sim: Simulation, r: Resident): string[] {
   const mine = secretsOf(sim, r);
   const known = knowledgeOf(sim, r);
   return [
-    ...(mine.length ? ['', '自分がしたことで、隠していること:', ...mine.map((l) => `- ${l}`)] : []),
+    ...(mine.length
+      ? [
+          '',
+          '自分がしたことで、隠していること（人に話せば恨まれたり広まったりし、村に知れれば集会で罰を受けることもある）:',
+          ...mine.map((l) => `- ${l}`),
+        ]
+      : []),
     ...(known.length ? ['', '人のしたことで、知っていること:', ...known.map((l) => `- ${l}`)] : []),
   ];
 }

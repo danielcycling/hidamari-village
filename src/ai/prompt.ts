@@ -181,7 +181,10 @@ function describe(sim: Simulation, self: Resident, other: Resident): string {
     `家: ${HOME_LEVEL_NAMES[self.homeLevel ?? 0]}、暮らしの満足: ${satisfactionLabel(self.satisfaction ?? 50)}${self.satisfactionNotes?.length ? `（${self.satisfactionNotes.slice(0, 2).join('・')}）` : ''}`,
     `${other.profile.name}への気持ち: 好感度 ${rel.affinity}（${affinityLabel(rel.affinity)}）／印象「${rel.impression}」`,
     ...between(sim, self, other),
-    ...section('自分がしたことで、隠していること（話すかどうかは自分しだい）', secretsOf(sim, self)),
+    ...section(
+      '自分がしたことで、隠していること（話すかどうかは自分しだい。話せば相手は恨むかもしれないし、ほかの人に広めるかもしれない。村に知れれば集会で罰を受けることもある。黙っていれば、知られずに済むかもしれない）',
+      secretsOf(sim, self),
+    ),
     ...section('人のしたことで、知っていること（話すかどうかは自分しだい）', knowledgeOf(sim, self)),
     ...(sim.temptationOf(self) ? [`心の奥でくすぶっている考え（口に出すかどうかは自分しだい）: 「${sim.temptationOf(self)}」`] : []),
     `最近の記憶:`,
