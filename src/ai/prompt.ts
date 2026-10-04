@@ -105,6 +105,7 @@ const SYSTEM_PROMPT = `あなたは小さな村「ひだまり村」の観察記
 - 無理に仲良くさせない。人物の状況や記憶に理由があれば、不満・嫉妬・恨み・怒り・軽蔑も自然に出してよい。反対に、理由がないのに対立させる必要もない。
 - 好感度は会話の内容に応じて -15〜+15 の範囲で変える。上がることも下がることも同じくらい普通にある。
 - 持っていない物やお金は渡せない。やりとりは、それぞれが持っている範囲でしか決まらない。
+- 腕前を教わるには、教わる側が教える側に代金を払う。腕前は財産なので、安くはない（上手な人ほど高く求めてよい）。
 - セリフ・summary・memory・impression は**すべて自然な日本語**で書く。英語や他の言語の単語を混ぜない。
 - 出力は指定のJSONのみ。`;
 
@@ -292,7 +293,7 @@ export function buildAgreementMessages(
     '',
     `まとめ: ${summary}`,
     '',
-    `agreements の書き方: type は ${AGREEMENT_TYPES.join('/')}。trade は from=売る人・to=買う人・item・qty・money=代金の合計。gift は from=あげる人・to=もらう人・item と qty、または money。loan は from=貸す人・to=借りる人・money・days=返すまでの日数。repay は from=返す人・to=貸した人・money。hush は from=黙っていてほしい人・to=黙ると約束した人・口止め料があれば item・qty・money。hire は from=雇う人・to=雇われる人・work=仕事（${WORK_ACTIONS.map((w) => `${w}=${ACTIONS[w].label}`).join('、')}）・money=日給・days=日数。quit は from=辞める人・to=雇い主。teach は from=教える人・to=教わる人・work=教える仕事（その場で教える。教える人のほうが上手でないと効果はない）。promise は from=約束する人・to=相手・text=約束の中身。品物の item は ${ITEM_IDS.map((id) => `${id}=${ITEMS[id].name}`).join('、')}。`,
+    `agreements の書き方: type は ${AGREEMENT_TYPES.join('/')}。trade は from=売る人・to=買う人・item・qty・money=代金の合計。gift は from=あげる人・to=もらう人・item と qty、または money。loan は from=貸す人・to=借りる人・money・days=返すまでの日数。repay は from=返す人・to=貸した人・money。hush は from=黙っていてほしい人・to=黙ると約束した人・口止め料があれば item・qty・money。hire は from=雇う人・to=雇われる人・work=仕事（${WORK_ACTIONS.map((w) => `${w}=${ACTIONS[w].label}`).join('、')}）・money=日給・days=日数。quit は from=辞める人・to=雇い主。teach は from=教える人・to=教わる人・work=教える仕事・money=教わる代金（その場で教える。教わる人は必ず代金を払う。教える人のほうが上手でないと効果はない）。promise は from=約束する人・to=相手・text=約束の中身。品物の item は ${ITEM_IDS.map((id) => `${id}=${ITEMS[id].name}`).join('、')}。`,
   ].join('\n');
   return [
     { role: 'system', content: AGREEMENT_SYSTEM },

@@ -109,6 +109,10 @@ const ASSEMBLY_FROM = 18;
 const ASSEMBLY_TO = 19.5;
 /** 話し合いがまとまらないまま、これ以上は待たない（分） */
 const ASSEMBLY_GIVE_UP = 240;
+/** 教わると、腕前の差のこの割合だけ上達する */
+const TEACH_GAIN = 0.4;
+/** 教わる代金の最低額（上達1あたり） */
+const TEACH_FEE_PER_POINT = 10;
 /** 家を1段改築したときに、村の人から集まる好感度（段の高さを掛ける） */
 const HOME_RESPECT = 4;
 /** お酒1杯で上がる満足 */
@@ -1188,7 +1192,8 @@ export class Simulation {
         employedAs: this.employmentOf(r)?.action,
       });
     r.plan = plan;
-    r.override = null;
+    // 飢えて決めた臨時の行動（夜明け前に決めることが多い）は、時間が来るまで続ける
+    if (r.override && this.clock.minutes >= r.override.until) r.override = null;
     if (plan.occupation !== undefined && plan.occupation !== r.occupation) {
       const before = r.occupation;
       r.occupation = plan.occupation;
@@ -2652,7 +2657,7 @@ export class Simulation {
         return;
       }
       case 'teach': {
-        // 教える側が上手なら、差の4分の1だけ上達する
+        // 教える側が上手なら、差の4割だけ上達する
         if (!ag.action) return;
         const skill = ACTIONS[ag.action].skill;
         if (!skill) return;
@@ -2667,10 +2672,20 @@ export class Simulation {
           this.remember(from, `${B}に${label}を教えようとしたが、自分の腕前（${theirs}）では${B}（${mine}）に教えられることはなかった`);
           return;
         }
-        const gain = Math.round(gap * 0.25);
+        // 教わるには必ずお金がかかる（決めた額か、上達の幅に見合った最低額の高いほう）
+        const gain = Math.max(1, Math.round(gap * TEACH_GAIN));
+        const fee = Math.max(money, gain * TEACH_FEE_PER_POINT);
+        if (to.money < fee) {
+          this.log(`${B}は${A}に${label}を教わろうとしたが、教わる代金${fee}Gを払えなかった`, 'deal');
+          this.remember(to, `${A}に${label}を教わりたかったが、代金${fee}Gが払えなかった`);
+          this.remember(from, `${B}に${label}を教えるはずだったが、${B}は代金${fee}Gを払えなかった`);
+          return;
+        }
+        moveMoney(to, from, fee);
         to.skills[skill] = Math.min(100, to.skills[skill] + gain);
-        this.log(`${A}が${B}に${label}を教えた（${B}の腕前 +${gain}）`, 'deal');
-        this.remember(to, `${A}に${label}を教わって、少し上達した`);
+        this.log(`${A}が${B}に${label}を教えた（${B}の腕前 +${gain}、代金${fee}G）`, 'deal');
+        this.remember(to, `${A}に${label}を教わって上達した（代金${fee}G）`);
+        this.remember(from, `${B}に${label}を教えて、代金${fee}Gを受け取った`);
         this.feel(to, from, 4, `${this.clock.day}日目、${label}を教えてくれた`);
         return;
       }
