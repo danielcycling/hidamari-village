@@ -759,7 +759,7 @@ const CRISIS_ACTIONS = ['visit', 'beg', 'buy', 'farm', 'fish', 'bake', 'steal', 
 
 const CRISIS_SYSTEM = `あなたは小さな村に暮らす村人本人です。いま空腹で、食べる物を何も持っていません。このままだと体力が減り、やがて死にます。
 これからの1〜2時間で、どうやって食べ物を手に入れるかを1つ選びます。ほかの用事は、食べ物を手に入れてからにする。
-- visit: 食べ物を持っている人に会いに行く（分けてもらう、買う、借りる、働いて返す、など。target に名前、purpose に頼みたいこと）
+- visit: 食べ物を持っていそうな人に会いに行く（分けてもらう、買う、借りる、働いて返す、など。target に名前、purpose に頼みたいこと）
 - beg: 広場で施しを求める
 - buy: 市場で買う（店を開いている人がいるときだけ意味がある）
 - farm / fish: 自分で採りに行く（すぐには食べられる量にならないかもしれない）
@@ -837,19 +837,23 @@ export function parseCrisis(
   const thought = hasForeignWords(clean(raw.thought, 80)) ? '' : clean(raw.thought, 80);
   const action = (CRISIS_ACTIONS as readonly string[]).includes(raw.action) ? (raw.action as ActionId) : 'fish';
   const fallback = (): ActionId => (r.money > 0 && sim.residents.some((o) => o !== r && o.shop) ? 'buy' : 'beg');
+  // 相手は村にいる人なら誰でもよい（持っているかどうかは、行ってみないと分からない）。
+  // 名前の欄が空でも、本音や用件に名前が出ていればその人とみなす
+  const others = sim.residents.filter((o) => o !== r);
+  const named = String(raw.target ?? '').trim();
+  const target =
+    others.find((o) => o.profile.name === named) ??
+    others.find((o) => `${raw.thought ?? ''}${raw.purpose ?? ''}`.includes(o.profile.name));
   if (action === 'steal' || action === 'rob') {
-    const t = foodHolders(sim, r).find((o) => o.profile.name === String(raw.target ?? '').trim());
-    if (t) return { action, target: t.profile.id, thought };
+    if (target) return { action, target: target.profile.id, thought };
     return { action: fallback(), thought };
   }
   if (action === 'visit') {
-    // 食べ物を持っていない人を訪ねても飢えはしのげない
-    const t = foodHolders(sim, r).find((o) => o.profile.name === String(raw.target ?? '').trim());
-    if (!t) return { action: fallback(), thought };
+    if (!target) return { action: fallback(), thought };
     const purpose = clean(raw.purpose, 40);
     return {
       action,
-      target: t.profile.id,
+      target: target.profile.id,
       purpose: `${HUNGRY_PURPOSE}。${purpose && !hasForeignWords(purpose) ? purpose : '食べ物を分けてほしい'}`,
       thought,
     };
