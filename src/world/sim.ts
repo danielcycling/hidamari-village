@@ -1355,13 +1355,16 @@ export class Simulation {
     );
   }
 
+  /** 今していること（計画・臨時の行動から決まる行動） */
+  private currentTaskAction(r: Resident): CurrentAction {
+    return this.currentTask(r).action;
+  }
+
   /** 夜、盗賊がやってくる。見張りが多く元気なら追い払える。だめなら村じゅうの物が奪われる */
   private resolveRaid() {
     this.raid = null;
-    const gate = this.map.places.gate.spot;
-    const guards = this.residents.filter(
-      (r) => r.action === 'guard' && (r.placeId === 'gate' || Math.hypot(r.x - gate.x, r.y - gate.y) <= 3),
-    );
+    // 見張りをしている人は、まだ持ち場に着いていなくても駆けつけて加わる
+    const guards = this.residents.filter((r) => r.action === 'guard' || this.currentTaskAction(r) === 'guard');
     const winter = seasonOf(this.clock.day) === 'winter';
     const bandits = 1.2 + this.weatherRng() * 1.0 + (winter ? 0.5 : 0);
     const defense = guards.reduce((n, g) => n + (Math.max(0, g.health) / 100) * (0.8 + this.rng() * 0.4), 0);
