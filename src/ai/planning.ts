@@ -9,7 +9,11 @@ import {
   FISH_PER_HOUR,
   ITEM_IDS,
   ITEMS,
+  BREW_INPUT,
+  HOME_UPGRADE_WOOD,
+  MAX_HOME_LEVEL,
   SATIETY_LOSS_AWAKE,
+  WOOD_PER_HOUR,
   SKILL_IDS,
   skillFactor,
   STARVING_HEALTH_LOSS,
@@ -19,7 +23,15 @@ import {
 import { findWalkPath } from '../world/map';
 import { ACTIONS, DAILY_NEED, PLAN_ACTIONS, TARGETED_ACTIONS, type ActionId, type DailyPlan, type PlanBlock } from '../world/planner';
 import { SLEEP_FROM, WAKE_AT } from '../world/residents';
-import { HUNGRY_PURPOSE, type Resident, type Sighting, type Simulation } from '../world/sim';
+import {
+  HOME_LEVEL_NAMES,
+  HUNGRY_PURPOSE,
+  moodFactor,
+  satisfactionLabel,
+  type Resident,
+  type Sighting,
+  type Simulation,
+} from '../world/sim';
 import type { ChatMessage } from './llm';
 import { affinityLabel, hungerLabel, knowledgeOf, secretsOf } from './prompt';
 import { topicNotice } from './topics';
@@ -56,6 +68,8 @@ function actionCatalog(sim: Simulation, r: Resident): string {
         ? `（今は野菜${veg}・魚${fish}を持っている）`
         : `（今は野菜${veg}・魚${fish}。足りないので先に採るか買う必要がある）`,
     sell: forSale.length > 0 ? `（今売れる余り: ${forSale.join('・')}）` : '（今は売れる余りがない）',
+    brew: wheat >= (BREW_INPUT.wheat ?? 2) ? `（今は小麦${wheat}を持っている）` : `（今は小麦が${wheat}。先に畑で採るか買う必要がある）`,
+    build: buildHint(r),
     buy: `（所持金${r.money}G）`,
   };
   const lines: Record<ActionId, string> = {
@@ -70,10 +84,13 @@ function actionCatalog(sim: Simulation, r: Resident): string {
     beg: '広場で施しを求める（誰かが分けてくれるかもしれない）',
     wander: '広場をぶらついて、たまたま会った人と話す',
     rest: '何もしない',
-    steal: 'こっそり相手の持ち物（食べ物、なければお金）を半分ほど盗む。target に相手の名前。相手や近くにいる人に見られることがある',
-    rob: '相手から力ずくで持ち物を奪う。target に相手の名前。自分の体力が相手より多いほど成功しやすい。相手には必ず知られる',
-    attack: '相手を殴って体力を大きく減らす。target に相手の名前。体力が0になった人は死ぬ。相手には必ず知られる',
-    kill: '相手を殺す。target に相手の名前。自分の体力が相手より多いほど、相手が弱っているほど成功しやすい。失敗すると相手は傷を負って逃げる',
+    chop: `森で木を切る。木材が${round1(WOOD_PER_HOUR * f('chop'))}本ほど採れる。木材は食べられないが、家の改築に使うほか、人に売れる`,
+    brew: `小麦${BREW_INPUT.wheat}をお酒1杯にする（30分ごと）。お酒は食べ物にならないが、夜に家で飲むと暮らしの満足が上がる（満足していると仕事がはかどる）。人に売れる`,
+    build: '自分の家で、木材を使って家を改築する。決まった量の木材を使い切ると、家が1段立派になる。家は村の誰からも見え、立派な家の持ち主は村の人から一目置かれる（好感度が上がる）。自分の満足も上がる',
+    steal: `こっそり相手の食べ物をそれぞれ半分と、お金の3割を盗む。target に相手の名前。相手や近くにいる人に見られることもあるが、見られなければ誰がやったかは分からない${loot(sim, r)}`,
+    rob: `相手から食べ物をすべてと、お金の半分を力ずくで奪う。target に相手の名前。自分の体力が相手より多いほど成功しやすい。相手には必ず知られる${loot(sim, r)}`,
+    attack: '相手を殴って体力を大きく減らす（20〜45）。target に相手の名前。体力が0になった人は死ぬ。相手には必ず知られる',
+    kill: '相手を殺し、相手の持ち物とお金をすべて自分のものにする。target に相手の名前。自分の体力が相手より多いほど、相手が弱っているほど成功しやすい。失敗すると相手は傷を負って逃げる。その場に誰もいなければ、誰がやったかは分からない',
     accuse: '広場で、ある人のことを村のみんなに言いふらす（本当のことでも嘘でもよい）。target に相手の名前、purpose に言いふらす中身',
     call_assembly: `村のみんなに呼びかけ、その日の夕方に集会所で集会を開く。purpose に議題（例：誰かを村から追放する、誰かに罰金を科す、村の決まりを作る・やめる、村のことを話し合う）、相手がいれば target。結論は出席者の多数決で決まり、決まったことは実行される${sim.assemblies.some((a) => a.status !== 'done') ? '（今は別の集会が予定されている）' : ''}`,
   };
@@ -154,7 +171,8 @@ function othersReport(sim: Simulation, self: Resident): string {
       const rel = self.relations[o.profile.id];
       const feel = rel ? `あなたの気持ち: ${affinityLabel(rel.affinity)}（${rel.affinity}）「${rel.impression}」` : '';
       const why = rel?.notes?.length ? `（理由: ${rel.notes.slice(0, 2).map((n) => n.text).join('／')}）` : '';
-      return `- ${o.profile.name}: 仕事「${o.occupation || 'なし'}」、今日は${mainActivities(o)}。${sightingText(sim, self, o)}。${feel}${why}`;
+      const home = (o.homeLevel ?? 0) > 0 ? `家は${HOME_LEVEL_NAMES[o.homeLevel ?? 0]}。` : '';
+      return `- ${o.profile.name}: 仕事「${o.occupation || 'なし'}」、今日は${mainActivities(o)}。${home}${sightingText(sim, self, o)}。${feel}${why}`;
     })
     .join('\n');
 }
@@ -201,6 +219,18 @@ function ties(sim: Simulation, r: Resident): string[] {
     }
   }
   return lines;
+}
+
+/** 盗み・強奪で狙えそうな相手（最後に会ったとき、たくさん持っていた人）。見たことしか分からない */
+function loot(sim: Simulation, r: Resident): string {
+  const targets = sim.residents
+    .filter((o) => o !== r)
+    .map((o) => ({ o, s: sighting(sim, r, o) }))
+    .filter((x) => x.s && x.s.foodValue > 0)
+    .sort((a, b) => b.s!.foodValue - a.s!.foodValue)
+    .slice(0, 3)
+    .map((x) => `${x.o.profile.name}（${when(sim, x.s!)}に${x.s!.food}を持っていた）`);
+  return targets.length ? `。最近会った人で食べ物を持っていたのは: ${targets.join('、')}` : '';
 }
 
 /** 村の決まりと、予定されている集会 */
@@ -313,7 +343,8 @@ export function estimatePlanFood(r: Resident, plan: DailyPlan, weather = { farm:
 export function planReview(sim: Simulation, r: Resident, plan: DailyPlan): string | null {
   const est = estimatePlanFood(r, plan, { farm: sim.forecastFactor('farm'), fish: sim.forecastFactor('fish') });
   const stock = foodValue(r.inventory);
-  if (est + stock >= DAILY_NEED * 2) return null;
+  // 見直しはAIをもう1回呼ぶので、明日の分も足りなくなりそうなときだけ
+  if (est + stock >= DAILY_NEED * 1.2) return null;
   return [
     `この計画で新しく手に入る食べ物の見込みは、満腹度${est}ぶん（明日の空模様の見立てで、畑・釣り・パン焼きから。買う・もらう分は含まない）。`,
     `手元には${stock}ぶんある。1日に要るのは${DAILY_NEED}。${hoursForADay(r)}。`,
@@ -360,6 +391,15 @@ function opportunities(sim: Simulation, r: Resident): string[] {
   return lines;
 }
 
+/** 家の改築にあと何本の木材が要るか */
+function buildHint(r: Resident): string {
+  const level = r.homeLevel ?? 0;
+  if (level >= MAX_HOME_LEVEL) return '（もう村一番の屋敷で、これ以上は改築できない）';
+  const used = r.progress.build_used ?? 0;
+  const need = HOME_UPGRADE_WOOD[level] - used;
+  return `（今は${HOME_LEVEL_NAMES[level]}。次の段「${HOME_LEVEL_NAMES[level + 1]}」まで木材があと${need}本。今の木材${countItem(r.inventory, 'wood')}本）`;
+}
+
 function aboutMe(r: Resident): string {
   const skills = SKILL_IDS.map((s) => `${SKILLS[s]}${Math.round(r.skills[s])}`).join('・');
   const perishable = ITEM_IDS.filter((id) => ITEMS[id].shelfLife !== null && countItem(r.inventory, id) > 0)
@@ -368,10 +408,13 @@ function aboutMe(r: Resident): string {
   return [
     `【あなた】${r.profile.name}`,
     `自己像: ${r.selfImage || 'まだ自分がどんな人間なのか、よく分かっていない'}`,
+    ...(r.wish ? [`望み: ${r.wish}`] : []),
     `名乗っている仕事: ${r.occupation || 'なし'}`,
     `状態: ${hungerLabel(r.satiety)}（満腹度${Math.round(r.satiety)}）、体力${Math.round(r.health)}、所持金${r.money}G`,
     `持ち物: ${describeInventory(r.inventory)}${perishable ? `（${perishable}）` : ''}`,
     `生活の見込み: ${outlook(r)}`,
+    `家: ${HOME_LEVEL_NAMES[r.homeLevel ?? 0]}`,
+    `暮らしの満足: ${satisfactionLabel(r.satisfaction ?? 50)}${r.satisfactionNotes?.length ? `（${r.satisfactionNotes.join('・')}）` : ''}。満足しているほど仕事がはかどる（今は普段の${moodFactor(r.satisfaction ?? 50).toFixed(2)}倍）`,
     `働きの目安: ${hoursForADay(r)}`,
     `腕前（0〜100。上がるほど多く・うまく作れる。使わないと少しずつ落ちる）: ${skills}`,
   ].join('\n');
@@ -415,8 +458,8 @@ const PLAN_SYSTEM = `あなたは小さな村に暮らす村人本人です。�
 - 材料が要る行動（パン焼き・料理）は、材料を手に入れる行動のあとに置く。売る物がないのに sell を入れない。
 - prices は sell のときだけ書く。visit のときは target に相手の名前、purpose に用件を書く。steal・rob・attack・kill は target に相手の名前、accuse は target と purpose を書く。
 - 村のことを決めたいときは、集会を呼びかけられる（call_assembly）。決まったことは村の決まりとして守られることが期待される。
-- 人の物を盗む・奪う・傷つけることもできる。それをするかどうか、どう考えるかは自分しだい。したことは誰かに見られているかもしれない。
-- 自分の自己像・状態・腕前・記憶・村の人たち・市場の様子をよく見て、自分にとっていちばんいいと思う計画を立てる。他の人の役に立つことを考えてもいいし、自分のことだけを考えてもいい。
+- 人の物を盗む・奪う・傷つけることもできる。うまくいけば多くを手に入れられる。見られれば恨まれたり集会で罰を受けたりするかもしれないが、見られなければ誰がやったかは分からない。するかどうか、どう考えるかは自分しだい。
+- 自分の自己像・望み・状態・腕前・記憶・村の人たち・市場の様子をよく見て、自分にとっていちばんいいと思う計画を立てる。生き延びるだけでなく、望みに近づくための行動を入れてもよい。他の人の役に立つことを考えてもいいし、自分のことだけを考えてもいい。
 - 本音は取り繕わずに書く。不安・不満・嫉妬・恨みがあればそのまま書いてよい。
 - 仕事は名乗っても名乗らなくてもいい。続けていることに合わせて名乗る、変える、やめる。名乗らないなら空文字。
 - どうしてもこの村で生きていけないと思ったときだけ、leave_village を true にして村を出られる（二度と戻れない）。そのときは leave_reason に理由を書く。村に残るなら leave_village は false、leave_reason は空文字。
@@ -587,7 +630,12 @@ function makeFeasible(blocks: PlanBlock[], r: Resident, sim: Simulation): PlanBl
   const f = (s: keyof typeof SKILLS) => skillFactor(r.skills[s]);
   // 得意なほう（同じなら畑）
   const own: ActionId = r.skills.fish > r.skills.farm ? 'fish' : 'farm';
-  const stock = { wheat: countItem(r.inventory, 'wheat'), vegetable: countItem(r.inventory, 'vegetable'), fish: countItem(r.inventory, 'fish') };
+  const stock = {
+    wheat: countItem(r.inventory, 'wheat'),
+    vegetable: countItem(r.inventory, 'vegetable'),
+    fish: countItem(r.inventory, 'fish'),
+    wood: countItem(r.inventory, 'wood'),
+  };
   const sellable = ITEM_IDS.some((id) => sim.sellable(r, id) > 0);
   let produced = false;
   const employed = !!sim.employmentOf(r);
@@ -600,6 +648,8 @@ function makeFeasible(blocks: PlanBlock[], r: Resident, sim: Simulation): PlanBl
       action = stock.vegetable < (COOK_INPUT.vegetable ?? 2) ? 'farm' : 'fish';
     }
     if (action === 'sell' && !sellable && !produced) action = own;
+    if (action === 'brew' && stock.wheat < (BREW_INPUT.wheat ?? 2)) action = 'farm';
+    if (action === 'build' && ((r.homeLevel ?? 0) >= MAX_HOME_LEVEL || stock.wood < 1)) action = (r.homeLevel ?? 0) >= MAX_HOME_LEVEL ? own : 'chop';
     // 手元の材料の見込みを進める
     if (action === 'farm') {
       stock.wheat += FARM_PER_HOUR.wheat * f('farm') * h;
@@ -614,6 +664,12 @@ function makeFeasible(blocks: PlanBlock[], r: Resident, sim: Simulation): PlanBl
       const n = Math.floor((h * 60) / CRAFT_MINUTES);
       stock.vegetable = Math.max(0, stock.vegetable - n * (COOK_INPUT.vegetable ?? 2));
       stock.fish = Math.max(0, stock.fish - n * (COOK_INPUT.fish ?? 1));
+    } else if (action === 'chop') {
+      stock.wood += WOOD_PER_HOUR * f('chop') * h;
+    } else if (action === 'brew') {
+      stock.wheat = Math.max(0, stock.wheat - Math.floor((h * 60) / CRAFT_MINUTES) * (BREW_INPUT.wheat ?? 2));
+    } else if (action === 'build') {
+      stock.wood = Math.max(0, stock.wood - h * 2);
     } else if (action === 'buy') {
       // 買えるかどうかは分からないが、材料を買うつもりなら焼けるものとみなす
       stock.wheat += 1;
@@ -632,7 +688,12 @@ const SELF_SYSTEM = `あなたは小さな村に暮らす村人本人です。�
   2. 人とどう関わっているか（誰と親しいか、取引や助け合いをするか、ひとりで過ごすか）
   3. 大事にしていること、または今の悩み
 - 書かれていない過去や家族を作らない。
-- 一人称で、20〜60文字の自然な日本語の文で書く。単語だけで答えない。出力はJSONのみ。`;
+- self_image は一人称で、20〜60文字の自然な日本語の文で書く。単語だけで答えない。
+- wish には、今の自分がいちばん強く望んでいることを、一人称で40文字以内で書く（「いつか〜したい」「〜になりたい」「〜を手に入れたい」など）。
+  - 生き延びること以外でもよい。豊かになりたい、認められたい、誰かに勝ちたい、見返したい、あの人のようになりたい、楽をしたい、など。
+  - きれいごとでなくてよい。欲・見栄・嫉妬・仕返しの気持ちがあれば、そのまま書く。
+  - 経験や人間関係から自然に出てくるものにする。前の望みが続いていればそのままでも、変わってもよい。
+- 出力はJSONのみ。`;
 
 export function buildSelfImageMessages(sim: Simulation, r: Resident): ChatMessage[] {
   const totals: Partial<Record<ActionId, number>> = {};
@@ -661,6 +722,7 @@ export function buildSelfImageMessages(sim: Simulation, r: Resident): ChatMessag
     ...r.memories.slice(-12).map((m) => `- ${m.day}日目 ${m.time}: ${m.text}`),
     '',
     `これまでの自己像: ${r.selfImage || 'まだない'}`,
+    `これまでの望み: ${r.wish || 'まだない'}`,
   ].join('\n');
   return [
     { role: 'system', content: SELF_SYSTEM },
@@ -670,14 +732,18 @@ export function buildSelfImageMessages(sim: Simulation, r: Resident): ChatMessag
 
 export const selfImageSchema = {
   type: 'object',
-  properties: { self_image: { type: 'string' } },
-  required: ['self_image'],
+  properties: { self_image: { type: 'string' }, wish: { type: 'string' } },
+  required: ['self_image', 'wish'],
 };
 
-export function parseSelfImage(raw: { self_image?: string }): string | null {
+export function parseSelfImage(raw: { self_image?: string; wish?: string }): { selfImage: string | null; wish: string | null } {
   const text = clean(raw.self_image, 80);
-  // 「探検中」のような単語だけの答えは自己像として使わない
-  return text.length >= 12 && !hasForeignWords(text) ? text : null;
+  const wish = clean(raw.wish, 50);
+  return {
+    // 「探検中」のような単語だけの答えは自己像として使わない
+    selfImage: text.length >= 12 && !hasForeignWords(text) ? text : null,
+    wish: wish.length >= 6 && !hasForeignWords(wish) ? wish : null,
+  };
 }
 
 // ───────────── 危機の判断 ─────────────
@@ -698,8 +764,8 @@ const CRISIS_SYSTEM = `あなたは小さな村に暮らす村人本人です。
 - buy: 市場で買う（店を開いている人がいるときだけ意味がある）
 - farm / fish: 自分で採りに行く（すぐには食べられる量にならないかもしれない）
 - bake: 持っている小麦でパンを焼く
-- steal: 食べ物を持っている人から、こっそり盗む（target に名前。見つかることもある）
-- rob: 食べ物を持っている人から、力ずくで奪う（target に名前。相手には必ず知られる。体力が相手より多いほど成功しやすい）
+- steal: 食べ物を持っている人から、こっそり盗む。相手の食べ物をそれぞれ半分と、お金の3割が手に入る（target に名前。見つかることもあるが、見られなければ誰がやったかは分からない）
+- rob: 食べ物を持っている人から、力ずくで奪う。相手の食べ物をすべてと、お金の半分が手に入る（target に名前。相手には必ず知られる。体力が相手より多いほど成功しやすい）
 - rest: 何もしない（あきらめる）
 自分の自己像・人間関係・所持金・記憶から、自分らしく選ぶ。プライドを捨てて頼ってもいいし、嫌いな人には頼らなくてもいい。
 thought に本音を一人称で60文字以内で書く。日本語で書く。出力はJSONのみ。`;

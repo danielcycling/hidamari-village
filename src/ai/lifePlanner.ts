@@ -1,3 +1,5 @@
+import { foodValue } from '../world/economy';
+import { DAILY_NEED } from '../world/planner';
 import { WAKE_AT } from '../world/residents';
 import type { Simulation } from '../world/sim';
 import type { OllamaClient } from './llm';
@@ -51,6 +53,8 @@ export class LifePlanner {
   private progress = { day: 0, total: 0, done: 0 };
   private dawnWaitStartedAt: number | null = null;
   private readonly lastCrisis = new Map<string, number>();
+  /** 朝までに見つめ直せなかった人（次の夜に先に回す） */
+  private pendingSelf: string[] = [];
 
   constructor(
     private readonly sim: Simulation,
@@ -117,16 +121,27 @@ export class LifePlanner {
     // 朝までに間に合わないと残りはルールの計画になるので、前の晩に間に合わなかった人
     // （新しく来た人を含む）から先に考える。あとは毎晩順番を回して、いつも同じ人が後回しにならないようにする
     const n = this.sim.residents.length;
-    const order = this.sim.residents
+    // 暮らしは習慣：考え直すのは2日に1度（人によって日をずらす）。困っているときや、
+    // 昨日の計画が自分で考えたものでなかったときは、毎晩考え直す。それ以外は今日と同じように過ごす
+    const rethink = this.sim.residents.filter((r, i) => {
+      if (r.plan?.source !== 'ai') return true;
+      if (r.satiety < 40 || foodValue(r.inventory) < DAILY_NEED) return true;
+      return (i + day) % 2 === 0;
+    });
+    for (const r of this.sim.residents) {
+      if (!rethink.includes(r) && r.plan) this.sim.setNextPlan(r, { ...r.plan, day: day + 1, thought: undefined });
+    }
+    const order = rethink
       .map((r, i) => ({ r, late: r.plan?.source === 'ai' ? 1 : 0, turn: (i + day) % Math.max(1, n) }))
       .sort((a, b) => a.late - b.late || a.turn - b.turn);
     const planJobs: Job[] = order.map(({ r }) => ({ kind: 'plan', residentId: r.profile.id, day: day + 1 }));
     this.queue.push(...planJobs);
     this.progress = { day: day + 1, total: planJobs.length, done: 0 };
     // 自己像の見つめ直しは、計画のあと夜のうちに（昼間のAIは会話に回したいので）
-    if (day % SELF_IMAGE_EVERY === 2) {
-      this.queue.push(...this.sim.residents.map((r): Job => ({ kind: 'self', residentId: r.profile.id, day })));
-    }
+    const selfIds = new Set(this.pendingSelf);
+    if (day % SELF_IMAGE_EVERY === 1) for (const r of this.sim.residents) selfIds.add(r.profile.id);
+    this.pendingSelf = [];
+    this.queue.push(...[...selfIds].filter((id) => this.sim.get(id)).map((id): Job => ({ kind: 'self', residentId: id, day })));
   }
 
   private async run(job: Job) {
@@ -165,12 +180,13 @@ export class LifePlanner {
         this.sim.log(`${r.profile.name}は飢えに追い詰められ、${what}${c.thought ? `「${c.thought}」` : ''}`, 'life');
         if (c.thought) this.sim.remember(r, `飢えに追い詰められて思ったこと：「${c.thought}」`);
       } else {
-        const raw = await this.llm.chatJSON<{ self_image?: string }>(
+        const raw = await this.llm.chatJSON<{ self_image?: string; wish?: string }>(
           buildSelfImageMessages(this.sim, r),
           selfImageSchema,
         );
-        const text = parseSelfImage(raw);
-        if (text) this.sim.setSelfImage(r, text);
+        const { selfImage, wish } = parseSelfImage(raw);
+        if (selfImage) this.sim.setSelfImage(r, selfImage);
+        if (wish) this.sim.setWish(r, wish);
       }
       this.lastError = null;
     } catch (e) {
@@ -184,6 +200,14 @@ export class LifePlanner {
   private dropStale() {
     const { day, hourOfDay } = this.sim.clock;
     this.queue = this.queue.filter((j) => j.kind !== 'plan' || j.day > day || (j.day === day && hourOfDay < WAKE_AT));
+    // 自己像の見つめ直しは夜のうちだけ（朝までに始められなければ次の機会に。昼のAIは会話に回す）
+    if (hourOfDay >= WAKE_AT && hourOfDay < 21) {
+      const dropped = this.queue.filter((j) => j.kind === 'self');
+      if (dropped.length) {
+        this.queue = this.queue.filter((j) => j.kind !== 'self');
+        this.pendingSelf.push(...dropped.map((j) => j.residentId));
+      }
+    }
   }
 
   private shouldHoldDawn(): boolean {

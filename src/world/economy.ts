@@ -1,6 +1,6 @@
 // ───────────── 品物 ─────────────
 
-export type ItemId = 'wheat' | 'vegetable' | 'fish' | 'bread' | 'meal';
+export type ItemId = 'wheat' | 'vegetable' | 'fish' | 'bread' | 'meal' | 'wood' | 'drink';
 
 export interface ItemDef {
   name: string;
@@ -21,6 +21,9 @@ export const ITEMS: Record<ItemId, ItemDef> = {
   fish: { name: '魚', satiety: 25, shelfLife: 1440, fallbackPrice: 8 },
   bread: { name: 'パン', satiety: 30, shelfLife: 2 * 1440, fallbackPrice: 10 },
   meal: { name: '定食', satiety: 50, shelfLife: 'day', fallbackPrice: 25 },
+  // 生き延びるのには要らないもの（家を立派にする・気分をよくする）
+  wood: { name: '木材', satiety: 0, shelfLife: null, fallbackPrice: 6 },
+  drink: { name: 'お酒', satiety: 0, shelfLife: null, fallbackPrice: 15 },
 };
 
 export const ITEM_IDS = Object.keys(ITEMS) as ItemId[];
@@ -114,13 +117,15 @@ export function describeInventory(inv: Inventory): string {
 
 // ───────────── 熟練度 ─────────────
 
-export type SkillId = 'farm' | 'fish' | 'bake' | 'cook';
+export type SkillId = 'farm' | 'fish' | 'bake' | 'cook' | 'chop' | 'build';
 
 export const SKILLS: Record<SkillId, string> = {
   farm: '畑仕事',
   fish: '釣り',
   bake: 'パン焼き',
   cook: '料理',
+  chop: '木こり',
+  build: '大工',
 };
 export const SKILL_IDS = Object.keys(SKILLS) as SkillId[];
 
@@ -157,6 +162,15 @@ export const CRAFT_MINUTES = 30;
 
 export const BAKE_INPUT: Partial<Record<ItemId, number>> = { wheat: 1 };
 export const COOK_INPUT: Partial<Record<ItemId, number>> = { vegetable: 2, fish: 1 };
+/** お酒は小麦から造る（食堂で） */
+export const BREW_INPUT: Partial<Record<ItemId, number>> = { wheat: 2 };
+/** 木を切って1時間あたりに採れる木材（熟練係数を掛ける前） */
+export const WOOD_PER_HOUR = 1;
+/** 家を1段立派にするのに要る木材（今の段→次の段）。いちばん上は3段目 */
+export const HOME_UPGRADE_WOOD = [6, 10, 16];
+export const MAX_HOME_LEVEL = HOME_UPGRADE_WOOD.length;
+/** 改築で木材1本を使うのにかかる分（大工の腕で短くなる） */
+export const BUILD_MINUTES_PER_WOOD = 30;
 
 export function hasInputs(inv: Inventory, inputs: Partial<Record<ItemId, number>>): boolean {
   return Object.entries(inputs).every(([id, n]) => countItem(inv, id as ItemId) >= (n ?? 0));

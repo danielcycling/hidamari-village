@@ -27,7 +27,10 @@ export type ActionId =
   | 'attack'
   | 'kill'
   | 'accuse'
-  | 'call_assembly';
+  | 'call_assembly'
+  | 'chop'
+  | 'brew'
+  | 'build';
 
 /** 相手のいるところへ行ってする行動（target が要る） */
 export const TARGETED_ACTIONS: ActionId[] = ['visit', 'steal', 'rob', 'attack', 'kill'];
@@ -36,8 +39,8 @@ export type CrimeAction = 'steal' | 'rob' | 'attack' | 'kill';
 export const CRIME_ACTIONS: CrimeAction[] = ['steal', 'rob', 'attack', 'kill'];
 
 /** 雇われて働ける仕事 */
-export type WorkAction = 'farm' | 'fish' | 'bake' | 'cook';
-export const WORK_ACTIONS: WorkAction[] = ['farm', 'fish', 'bake', 'cook'];
+export type WorkAction = 'farm' | 'fish' | 'bake' | 'cook' | 'chop' | 'brew';
+export const WORK_ACTIONS: WorkAction[] = ['farm', 'fish', 'bake', 'cook', 'chop', 'brew'];
 
 export interface ActionDef {
   label: string;
@@ -52,6 +55,9 @@ export const ACTIONS: Record<ActionId, ActionDef> = {
   fish: { label: '釣り', place: 'fishing', skill: 'fish' },
   bake: { label: 'パン焼き', place: 'bakery', skill: 'bake' },
   cook: { label: '料理', place: 'kitchen', skill: 'cook' },
+  chop: { label: '木を切る', place: 'forest', skill: 'chop' },
+  brew: { label: 'お酒を造る', place: 'kitchen', skill: 'cook' },
+  build: { label: '家を改築する', place: 'home', skill: 'build' },
   sell: { label: '市場で売る', place: 'plaza' },
   buy: { label: '市場で買う', place: 'plaza' },
   // 相手のいる場所へ行く（場所は相手しだい）

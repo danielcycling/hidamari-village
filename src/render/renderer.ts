@@ -158,6 +158,8 @@ export class Renderer {
     const bx = b.rect.x * TILE;
     const by = b.rect.y * TILE;
     const bw = b.rect.w * TILE;
+    const owner = sim.residents.find((r) => r.profile.homeId === placeId);
+    if (owner?.homeLevel) this.drawHomeUpgrade(b, owner.homeLevel);
     label(ctx, name, bx + bw / 2, by + 10, 6.5, '#fff8e6');
 
     const inside = sim.residents.filter((r) => r.indoors && r.placeId === placeId);
@@ -179,6 +181,47 @@ export class Renderer {
       const text = speechOf(sim, r, now);
       if (text) bubbles.push({ text, cx: fx + 2.5, bottom: fy - 2 });
     });
+  }
+
+  /** 改築した家の飾り（1段：花の窓辺、2段：塀と庭木、3段：金の屋根飾りと旗） */
+  private drawHomeUpgrade(b: Building, level: number) {
+    const { ctx } = this;
+    const x = b.rect.x * TILE;
+    const y = b.rect.y * TILE;
+    const w = b.rect.w * TILE;
+    const h = b.rect.h * TILE;
+    if (level >= 1) {
+      // 窓辺の花
+      for (const win of windowRects(b)) {
+        ctx.fillStyle = '#7a4a2a';
+        ctx.fillRect(win.x - 1, win.y + win.h + 1, win.w + 2, 2);
+        ctx.fillStyle = '#f7a8c4';
+        ctx.fillRect(win.x, win.y + win.h, 2, 1);
+        ctx.fillStyle = '#fff3a8';
+        ctx.fillRect(win.x + win.w - 2, win.y + win.h, 2, 1);
+      }
+    }
+    if (level >= 2) {
+      // 低い塀と庭木
+      ctx.fillStyle = '#e9e2d0';
+      ctx.fillRect(x - 4, y + h + 1, 3, 2);
+      ctx.fillRect(x + w + 1, y + h + 1, 3, 2);
+      ctx.fillStyle = '#2f6b33';
+      ctx.fillRect(x - 6, y + h - 7, 5, 6);
+      ctx.fillRect(x + w + 1, y + h - 7, 5, 6);
+      ctx.fillStyle = '#62ad55';
+      ctx.fillRect(x - 5, y + h - 6, 2, 2);
+      ctx.fillRect(x + w + 2, y + h - 6, 2, 2);
+    }
+    if (level >= 3) {
+      // 金の屋根飾りと旗
+      ctx.fillStyle = '#e8c35a';
+      ctx.fillRect(x - 1, y, w + 2, 1);
+      ctx.fillStyle = '#6b4a2b';
+      ctx.fillRect(x + w - 4, y - 9, 1, 9);
+      ctx.fillStyle = '#e45874';
+      ctx.fillRect(x + w - 3, y - 9, 5, 3);
+    }
   }
 
   private drawGrave(tx: number, ty: number) {
@@ -429,6 +472,7 @@ const GROUND: Partial<Record<Tile, [string, string]>> = {
   bridge: ['#4f8fd0', '#4682c2'],
   dock: ['#a0703c', '#8a5e30'],
   field: ['#8a5a32', '#77492a'],
+  woods: ['#5f9443', '#4f7f37'],
 };
 
 function drawTile(ctx: CanvasRenderingContext2D, tile: Tile, x: number, y: number) {
@@ -485,6 +529,20 @@ function drawTile(ctx: CanvasRenderingContext2D, tile: Tile, x: number, y: numbe
     case 'dock':
       ctx.fillStyle = '#7a5228';
       for (let r = 0; r < TILE; r += 4) ctx.fillRect(px, py + r, TILE, 1);
+      break;
+    case 'woods':
+      // 伐採地：切り株と、ところどころの若木
+      if (hash2(x, y) < 0.5) {
+        ctx.fillStyle = '#8a6a43';
+        ctx.fillRect(px + 5, py + 8, 6, 4);
+        ctx.fillStyle = '#c9a877';
+        ctx.fillRect(px + 6, py + 8, 4, 2);
+      } else {
+        ctx.fillStyle = '#6b4a2b';
+        ctx.fillRect(px + 7, py + 8, 2, 6);
+        ctx.fillStyle = '#3f8a3f';
+        ctx.fillRect(px + 4, py + 3, 8, 6);
+      }
       break;
     case 'bridge':
       ctx.fillStyle = '#a0703c';

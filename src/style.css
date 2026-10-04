@@ -1039,3 +1039,9 @@ body {
   font-size: 12px;
   line-height: 1.7;
 }
+
+.wish {
+  color: var(--accent);
+  font-size: 13px;
+  margin: 4px 0 8px;
+}

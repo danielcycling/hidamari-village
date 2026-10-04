@@ -10,6 +10,7 @@ const WALK_COST: Record<Tile, number> = {
   grass: 2.5,
   flower: 2.5,
   field: 3,
+  woods: 2.5,
   water: Infinity,
   tree: Infinity,
   building: Infinity,

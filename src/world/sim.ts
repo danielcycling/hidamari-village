@@ -16,6 +16,11 @@ import { Clock } from './clock';
 import {
   addItem,
   BAKE_INPUT,
+  BREW_INPUT,
+  BUILD_MINUTES_PER_WOOD,
+  HOME_UPGRADE_WOOD,
+  MAX_HOME_LEVEL,
+  WOOD_PER_HOUR,
   COOK_INPUT,
   countItem,
   CRAFT_MINUTES,
@@ -102,12 +107,21 @@ const ASSEMBLY_FROM = 18;
 const ASSEMBLY_TO = 19.5;
 /** 話し合いがまとまらないまま、これ以上は待たない（分） */
 const ASSEMBLY_GIVE_UP = 240;
+/** 家を1段改築したときに、村の人から集まる好感度（段の高さを掛ける） */
+const HOME_RESPECT = 4;
+/** お酒1杯で上がる満足 */
+const DRINK_JOY = 15;
+/** 家の立派さの呼び名（0〜3） */
+export const HOME_LEVEL_NAMES = ['ふつうの家', '手入れの行き届いた家', '立派な家', '村一番の屋敷'];
 /** 悪魔のささやきが心に残る時間（分） */
 const TEMPTATION_MINUTES = 2 * 1440;
 /** 飢えて頼んだのに断られたときの、相手への気持ちの下がり方 */
 const REFUSAL_GRUDGE = 8;
 /** 盗み・暴力を見ていられる距離（マス） */
 const WITNESS_RANGE = 7;
+/** 盗み・強奪で取れる割合（食べ物はそれぞれの種類から、お金は所持金から） */
+const STEAL_SHARE = { food: 0.5, money: 0.3 };
+const ROB_SHARE = { food: 1, money: 0.5 };
 /** 盗まれた本人がその場で気づく確率 */
 const STEAL_NOTICE = 0.35;
 /** 居合わせた人が盗みに気づく確率・暴力に気づく確率 */
@@ -157,6 +171,9 @@ export interface DayStats {
   spoiled: Partial<Record<ItemId, number>>;
   /** 行動ごとに費やした時間 */
   hours: Partial<Record<ActionId, number>>;
+  /** お酒を飲んだ数・AIの会話をした数（満足の材料） */
+  drank?: number;
+  talks?: number;
 }
 
 /** 過去の1日の記録（自己像や計画の材料） */
@@ -224,6 +241,14 @@ export interface Resident {
   /** 前の晩に立てた、翌日の計画 */
   nextPlan: DailyPlan | null;
   selfImageHistory: { day: number; text: string }[];
+  /** 家の立派さ（0〜3）。改築すると上がり、誰からも見える */
+  homeLevel?: number;
+  /** 暮らしの満足（0〜100）と、その理由（毎晩見直す） */
+  satisfaction?: number;
+  satisfactionNotes?: string[];
+  /** 経験から育った望み（「いつか〜したい」）。自己像と一緒に見つめ直す */
+  wish?: string;
+  wishHistory?: { day: number; text: string }[];
   /** 村を出ていく理由（出ていく途中なら入る） */
   leaving: string | null;
   /** 「高すぎて買えなかった」を最後に覚えた日（同じ日に何度も覚えないため） */
@@ -311,9 +336,12 @@ export interface Deed {
   victimName: string;
   /** うまくいったか（盗めた・奪えた・殺せた） */
   success: boolean;
+  /** 盗んだ・奪ったもの */
+  items?: { item: ItemId; qty: number }[];
+  money?: number;
+  /** 古い保存データ用（1種類だけ記録していたころ） */
   item?: ItemId;
   qty?: number;
-  money?: number;
   /** 殴った・抵抗されたときの傷 */
   damage?: number;
   day: number;
@@ -1022,6 +1050,7 @@ export class Simulation {
   /** 1日の終わり：出来高を要約して記憶とログに残し、使わなかった技能を衰えさせる */
   private endOfDay() {
     const day = this.clock.day - 1;
+    for (const r of this.residents) this.updateSatisfaction(r, day);
     // 飢えた人は、そのとき食べ物を余らせていた人を覚えている（恨むかどうかは本人しだい）
     for (const r of this.residents) {
       if (r.satiety > 0) continue;
@@ -1210,6 +1239,15 @@ export class Simulation {
     if (this.residents.includes(r)) r.nextPlan = plan;
   }
 
+  /** 望みを更新する */
+  setWish(r: Resident, text: string): void {
+    if (!this.residents.includes(r) || !text || text === r.wish) return;
+    r.wish = text;
+    (r.wishHistory ??= []).push({ day: this.clock.day, text });
+    if (r.wishHistory.length > 10) r.wishHistory.shift();
+    this.log(`${r.profile.name}の望み：「${text}」`, 'plan', { speakerId: r.profile.id });
+  }
+
   /** 自己像を更新する */
   setSelfImage(r: Resident, text: string): void {
     if (!this.residents.includes(r) || !text || text === r.selfImage) return;
@@ -1330,7 +1368,10 @@ export class Simulation {
     if (r.satiety <= 0) r.health -= STARVING_HEALTH_LOSS * dt;
     else if (r.satiety >= 50) r.health = Math.min(100, r.health + HEALTH_RECOVERY * dt);
 
-    if (!asleep) this.maybeEat(r);
+    if (!asleep) {
+      this.maybeEat(r);
+      this.maybeDrink(r);
+    }
 
     if (before >= HUNGRY_BELOW && r.satiety < HUNGRY_BELOW) {
       this.log(`${r.profile.name}はお腹を空かせている（食べ物 ${describeInventory(r.inventory)}、所持金${r.money}G）`, 'life');
@@ -1340,6 +1381,80 @@ export class Simulation {
       this.remember(r, '食べる物がなく、飢え始めた');
     }
     if (r.health <= 0) this.die(r, '飢え');
+  }
+
+  /**
+   * 暮らしの満足を1日の終わりに見直す。生き延びることとは別の「欲」の材料になる。
+   * 数値よりも理由（飽きた・寂しい・羨ましい）を本人に見せる
+   */
+  private updateSatisfaction(r: Resident, day: number) {
+    const notes: { text: string; delta: number }[] = [];
+    const t = r.today;
+    const ateKinds = ITEM_IDS.filter((id) => (t.ate[id] ?? 0) > 0);
+    if (r.satiety <= 0 || ateKinds.length === 0) notes.push({ text: 'ろくに食べられていない', delta: -20 });
+    else if (ateKinds.length >= 3) notes.push({ text: 'いろいろな物を食べられた', delta: 6 });
+    else if (ateKinds.length === 1 && (t.ate[ateKinds[0]] ?? 0) >= 2) notes.push({ text: `${ITEMS[ateKinds[0]].name}ばかりで飽きた`, delta: -6 });
+    if ((t.ate.meal ?? 0) > 0) notes.push({ text: '定食を味わえた', delta: 5 });
+    if ((t.drank ?? 0) > 0) notes.push({ text: 'お酒を飲んでくつろいだ', delta: 0 });
+    if ((t.talks ?? 0) === 0) notes.push({ text: '誰ともちゃんと話していない', delta: -8 });
+    else if ((t.talks ?? 0) >= 3) notes.push({ text: '人とたくさん話した', delta: 4 });
+    // 家は誰からも見えるので、比べてしまう
+    const mine = r.homeLevel ?? 0;
+    const best = this.residents.filter((o) => o !== r).sort((a, b) => (b.homeLevel ?? 0) - (a.homeLevel ?? 0))[0];
+    const bestLevel = best?.homeLevel ?? 0;
+    if (best && bestLevel > mine) {
+      notes.push({ text: `${best.profile.name}の家（${HOME_LEVEL_NAMES[bestLevel]}）のほうが立派で羨ましい`, delta: -5 * (bestLevel - mine) });
+    } else if (mine > 0 && mine > bestLevel) {
+      notes.push({ text: '自分の家が村でいちばん立派だ', delta: 8 });
+    } else if (mine > 0) {
+      notes.push({ text: `${HOME_LEVEL_NAMES[mine]}に住んでいる`, delta: 3 });
+    }
+    // ふだんは真ん中へ戻っていき、その日のことで上下する
+    const before = r.satisfaction ?? 50;
+    const after = Math.max(0, Math.min(100, Math.round(before * 0.7 + 50 * 0.3 + notes.reduce((n, x) => n + x.delta, 0))));
+    r.satisfaction = after;
+    r.satisfactionNotes = notes.filter((n) => n.delta !== 0 || n.text.includes('お酒')).map((n) => n.text).slice(0, 4);
+    if (after < 30 && r.satisfactionNotes.length) this.remember(r, `${day}日目、暮らしに満足できなかった（${r.satisfactionNotes.join('・')}）`);
+  }
+
+  /** 夕方以降、家でお酒があれば1日1杯だけ飲む（満腹にはならないが、気分がよくなる） */
+  private maybeDrink(r: Resident) {
+    const h = this.clock.hourOfDay;
+    if (h < 19 || (r.today.drank ?? 0) >= 1 || r.placeId !== r.profile.homeId) return;
+    if (countItem(r.inventory, 'drink') < 1) return;
+    takeItem(r.inventory, 'drink', 1);
+    r.today.drank = (r.today.drank ?? 0) + 1;
+    r.satisfaction = Math.min(100, (r.satisfaction ?? 50) + DRINK_JOY);
+  }
+
+  /** 家を改築する：木材を少しずつ使い、決まった量を使い切ると家が1段立派になる */
+  private buildHome(r: Resident, task: Task, dt: number) {
+    const level = r.homeLevel ?? 0;
+    if (level >= MAX_HOME_LEVEL) return;
+    const key = 'build_wood';
+    if ((r.progress[key] ?? 0) === 0 && countItem(r.inventory, 'wood') < 1) {
+      this.log(`${r.profile.name}は木材がなく、家の改築ができなかった`, 'life');
+      r.override = { action: 'wander', until: blockEnd(this.clock.minutes, task.block) };
+      return;
+    }
+    const f = this.work(r, 'build', dt);
+    r.progress[key] = (r.progress[key] ?? 0) + (dt * f) / BUILD_MINUTES_PER_WOOD;
+    if (r.progress[key]! < 1) return;
+    r.progress[key] = 0;
+    takeItem(r.inventory, 'wood', 1);
+    r.progress.build_used = (r.progress.build_used ?? 0) + 1;
+    if (r.progress.build_used! < HOME_UPGRADE_WOOD[level]) return;
+    r.progress.build_used = 0;
+    r.homeLevel = level + 1;
+    const text = `${r.profile.name}が家を改築した（${HOME_LEVEL_NAMES[r.homeLevel]}）`;
+    this.announce(text, 'life');
+    this.remember(r, `家を改築して、${HOME_LEVEL_NAMES[r.homeLevel]}にした`);
+    r.satisfaction = Math.min(100, (r.satisfaction ?? 50) + 10 * r.homeLevel);
+    // 立派な家は誰の目にも入る。村の人は持ち主に一目置くようになる
+    for (const o of this.residents) {
+      if (o === r) continue;
+      this.feel(o, r, HOME_RESPECT * r.homeLevel, `${this.clock.day}日目、${r.profile.name}が家を${HOME_LEVEL_NAMES[r.homeLevel]}に改築したのを見て、一目置いた`);
+    }
   }
 
   private maybeEat(r: Resident) {
@@ -1447,7 +1562,12 @@ export class Simulation {
       case 'fish':
       case 'bake':
       case 'cook':
+      case 'chop':
+      case 'brew':
         this.doWork(r, r, task.action, task, dt);
+        break;
+      case 'build':
+        this.buildHome(r, task, dt);
         break;
       case 'work_for': {
         const emp = this.employmentOf(r);
@@ -1510,6 +1630,14 @@ export class Simulation {
           if (this.rng() < Math.min(1, 0.3 + 0.5 * f)) this.produce(owner, 'meal', 1);
         });
         break;
+      case 'chop': {
+        const f = this.work(worker, 'chop', dt);
+        this.accumulate(worker, owner, 'wood', WOOD_PER_HOUR * f * (dt / 60));
+        break;
+      }
+      case 'brew':
+        this.craft(worker, owner, task, 'cook', BREW_INPUT, dt, () => this.produce(owner, 'drink', 1));
+        break;
     }
   }
 
@@ -1536,7 +1664,8 @@ export class Simulation {
   /** 働いた分だけ上達し、その時点の熟練係数を返す */
   private work(r: Resident, skill: SkillId, dt: number): number {
     r.skills[skill] = practice(r.skills[skill], dt);
-    return skillFactor(r.skills[skill]);
+    // 満ち足りていると仕事がはかどり、不満だとやる気が出ない
+    return skillFactor(r.skills[skill]) * moodFactor(r.satisfaction ?? 50);
   }
 
   /** 端数は働いた本人が持ち、1個になったら持ち主のものになる */
@@ -1561,7 +1690,7 @@ export class Simulation {
     dt: number,
     output: (factor: number) => void,
   ) {
-    const key = `craft_${skill}`;
+    const key = `craft_${skill}_${Object.keys(inputs).join('_')}`;
     if ((worker.progress[key] ?? 0) === 0 && !hasInputs(owner.inventory, inputs)) {
       // 材料がない：その時間は市場をぶらつく
       const missing = Object.keys(inputs).map((id) => ITEMS[id as ItemId].name).join('と');
@@ -1804,29 +1933,36 @@ export class Simulation {
     });
   }
 
-  /** 相手から食べ物（なければお金）を取る。share は取る割合 */
-  private takeFrom(actor: Resident, victim: Resident, share: number): Pick<Deed, 'item' | 'qty' | 'money'> {
-    const foods = ITEM_IDS.filter((id) => isFood(id) && countItem(victim.inventory, id) > 0).sort(
-      (a, b) => ITEMS[b].satiety * countItem(victim.inventory, b) - ITEMS[a].satiety * countItem(victim.inventory, a),
-    );
-    if (foods.length > 0) {
-      const item = foods[0];
-      const qty = Math.max(1, Math.ceil(countItem(victim.inventory, item) * share));
-      moveItems(victim.inventory, actor.inventory, item, qty, this.clock.minutes);
-      return { item, qty };
+  /**
+   * 相手の持ち物とお金を取る。foodShare は食べ物（allItems なら小麦なども）のそれぞれから取る割合、
+   * moneyShare はお金の割合
+   */
+  private takeFrom(
+    actor: Resident,
+    victim: Resident,
+    foodShare: number,
+    moneyShare: number,
+    allItems = false,
+  ): Pick<Deed, 'items' | 'money'> {
+    const items: { item: ItemId; qty: number }[] = [];
+    for (const id of ITEM_IDS) {
+      const have = countItem(victim.inventory, id);
+      if (have <= 0 || (!allItems && !isFood(id))) continue;
+      const qty = foodShare >= 1 ? have : Math.max(1, Math.ceil(have * foodShare));
+      moveItems(victim.inventory, actor.inventory, id, qty, this.clock.minutes);
+      items.push({ item: id, qty });
     }
-    const money = Math.floor(victim.money * share);
-    if (money <= 0) return {};
-    victim.money -= money;
-    actor.money += money;
-    return { money };
+    const money = Math.floor(victim.money * moneyShare);
+    if (money > 0) {
+      victim.money -= money;
+      actor.money += money;
+    }
+    return { items, money: money > 0 ? money : undefined };
   }
 
   /** 盗んだもの・奪ったものを言葉にする */
-  private loot(d: Pick<Deed, 'item' | 'qty' | 'money'>): string {
-    if (d.item) return `${ITEMS[d.item].name}${d.qty}個`;
-    if (d.money) return `${d.money}G`;
-    return '';
+  private loot(d: Pick<Deed, 'items' | 'money' | 'item' | 'qty'>): string {
+    return lootText(d);
   }
 
   /** 非行・暴力を実行する（相手のそばに来たときに呼ぶ） */
@@ -1856,8 +1992,8 @@ export class Simulation {
     let what = '';
 
     if (kind === 'steal') {
-      Object.assign(deed, this.takeFrom(actor, victim, 0.5));
-      deed.success = !!(deed.item || deed.money);
+      Object.assign(deed, this.takeFrom(actor, victim, STEAL_SHARE.food, STEAL_SHARE.money));
+      deed.success = !!this.loot(deed);
       what = deed.success ? `${B}から${this.loot(deed)}を盗んだ` : `${B}から盗もうとしたが、盗めるものがなかった`;
       if (deed.success && this.rng() < (asleep ? 0.1 : STEAL_NOTICE)) {
         deed.knownBy[victim.profile.id] = 'victim';
@@ -1866,8 +2002,8 @@ export class Simulation {
     } else if (kind === 'rob') {
       deed.success = this.rng() < clamp01(0.55 + edge, 0.15, 0.9);
       if (deed.success) {
-        Object.assign(deed, this.takeFrom(actor, victim, 1));
-        what = deed.item || deed.money ? `${B}から${this.loot(deed)}を力ずくで奪った` : `${B}から奪おうとしたが、何も持っていなかった`;
+        Object.assign(deed, this.takeFrom(actor, victim, ROB_SHARE.food, ROB_SHARE.money));
+        what = this.loot(deed) ? `${B}から${this.loot(deed)}を力ずくで奪った` : `${B}から奪おうとしたが、何も持っていなかった`;
         this.hurt(victim, (deed.damage = 5));
       } else {
         what = `${B}から奪おうとしたが、抵抗されて失敗した`;
@@ -1885,7 +2021,11 @@ export class Simulation {
       deed.actorSawWitness.push(victim.profile.id);
     } else {
       deed.success = this.rng() < clamp01(0.45 + edge, 0.1, 0.95);
-      if (deed.success) what = `${B}を殺した`;
+      if (deed.success) {
+        // 殺した相手の持ち物とお金は、すべて自分のものにできる
+        Object.assign(deed, this.takeFrom(actor, victim, 1, 1, true));
+        what = `${B}を殺し${this.loot(deed) ? `、${this.loot(deed)}を奪った` : 'た'}`;
+      }
       else {
         deed.damage = Math.round(25 + this.rng() * 25);
         what = `${B}を殺そうとしたが、${B}は逃げのびた`;
@@ -1919,7 +2059,7 @@ export class Simulation {
         kind === 'steal'
           ? `${A}に${this.loot(deed)}を盗まれた`
           : kind === 'rob'
-            ? deed.success && (deed.item || deed.money)
+            ? deed.success && this.loot(deed)
               ? `${A}に${this.loot(deed)}を力ずくで奪われた`
               : `${A}に襲われ、物を奪われそうになった`
             : kind === 'attack'
@@ -2315,6 +2455,7 @@ export class Simulation {
       if (r.state === 'talking') r.state = r.path.length > 0 ? 'walking' : 'idle';
       r.idleUntil = this.clock.minutes + randInt(this.rng, 3, 15);
     }
+    if (conv.kind === 'ai') for (const r of [conv.a, conv.b]) r.today.talks = (r.today.talks ?? 0) + 1;
     // 片方が亡くなっていたら、記憶や関係は更新しない
     if (conv.outcome && this.residents.includes(conv.a) && this.residents.includes(conv.b)) {
       this.applyOutcome(conv, conv.outcome);
@@ -2602,10 +2743,13 @@ const SKILL_OUTPUTS: Record<SkillId, ItemId[]> = {
   farm: ['wheat', 'vegetable'],
   fish: ['fish'],
   bake: ['bread'],
-  cook: ['meal'],
+  cook: ['meal', 'drink'],
+  chop: ['wood'],
+  build: [],
 };
 
 function usedSkill(stats: DayStats, skill: SkillId): boolean {
+  if (skill === 'build') return (stats.hours.build ?? 0) > 0;
   return SKILL_OUTPUTS[skill].some((id) => (stats.produced[id] ?? 0) > 0);
 }
 
@@ -2653,4 +2797,25 @@ export function looksOf(r: Resident): string {
   if (r.satiety < 30) return '腹を空かせている';
   if (r.health < 80) return 'けがをしているか、少し弱っている';
   return '元気そう';
+}
+
+/** 盗んだもの・奪ったもの（「パン2個・魚1個と30G」） */
+export function lootText(d: Pick<Deed, 'items' | 'money' | 'item' | 'qty'>): string {
+  const items = d.items ?? (d.item ? [{ item: d.item, qty: d.qty ?? 1 }] : []);
+  const goods = items.map((x) => `${ITEMS[x.item].name}${x.qty}個`).join('・');
+  const money = d.money ? `${d.money}G` : '';
+  return [goods, money].filter(Boolean).join('と');
+}
+
+/** 暮らしの満足の言い方 */
+export function satisfactionLabel(n: number): string {
+  if (n >= 75) return '満ち足りている';
+  if (n >= 55) return 'まずまず';
+  if (n >= 35) return '物足りない';
+  return '不満だらけ';
+}
+
+/** 満足による仕事のはかどり具合（満足0で0.8倍、50で1倍、100で1.2倍） */
+export function moodFactor(satisfaction: number): number {
+  return 0.8 + 0.4 * (Math.max(0, Math.min(100, satisfaction)) / 100);
 }

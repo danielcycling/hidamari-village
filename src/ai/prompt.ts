@@ -1,6 +1,6 @@
 import { describeInventory, foodValue, ITEM_IDS, ITEMS, SKILL_IDS, SKILLS } from '../world/economy';
 import { ACTIONS, DAILY_NEED, WORK_ACTIONS } from '../world/planner';
-import type { Deed, Resident, Simulation } from '../world/sim';
+import { HOME_LEVEL_NAMES, lootText, satisfactionLabel, type Deed, type Resident, type Simulation } from '../world/sim';
 import type { ChatMessage } from './llm';
 import { topicNotice } from './topics';
 
@@ -52,14 +52,10 @@ const DEED_TEXT: Record<Deed['kind'], (d: Deed) => string> = {
   steal: (d) => (d.success ? `${d.victimName}から${loot(d)}をこっそり盗んだ` : `${d.victimName}から盗もうとした`),
   rob: (d) => (d.success && loot(d) ? `${d.victimName}から${loot(d)}を力ずくで奪った` : `${d.victimName}から力ずくで奪おうとした`),
   attack: (d) => `${d.victimName}を殴った`,
-  kill: (d) => (d.success ? `${d.victimName}を殺した` : `${d.victimName}を殺そうとした`),
+  kill: (d) => (d.success ? `${d.victimName}を殺し${loot(d) ? `、${loot(d)}を奪った` : 'た'}` : `${d.victimName}を殺そうとした`),
 };
 
-function loot(d: Deed): string {
-  if (d.item) return `${ITEMS[d.item].name}${d.qty}個`;
-  if (d.money) return `${d.money}G`;
-  return '';
-}
+const loot = (d: Deed) => lootText(d);
 
 /** 自分がしたこと（隠していること）。番号つき */
 export function secretsOf(sim: Simulation, r: Resident): string[] {
@@ -172,11 +168,13 @@ function describe(sim: Simulation, self: Resident, other: Resident): string {
   return [
     `【${p.name}】`,
     `自己像: ${self.selfImage || 'まだ自分がどんな人間なのか、よく分かっていない'}`,
+    ...(self.wish ? [`望み: ${self.wish}`] : []),
     `名乗っている仕事: ${self.occupation || 'なし'}`,
     `状態: ${hungerLabel(self.satiety)}、体力${Math.round(self.health)}、所持金${self.money}G`,
     `持ち物: ${describeInventory(self.inventory)}`,
     `腕前（0〜100）: ${bestSkills(self)}`,
     `今していること: ${self.activity}`,
+    `家: ${HOME_LEVEL_NAMES[self.homeLevel ?? 0]}、暮らしの満足: ${satisfactionLabel(self.satisfaction ?? 50)}${self.satisfactionNotes?.length ? `（${self.satisfactionNotes.slice(0, 2).join('・')}）` : ''}`,
     `${other.profile.name}への気持ち: 好感度 ${rel.affinity}（${affinityLabel(rel.affinity)}）／印象「${rel.impression}」`,
     ...between(sim, self, other),
     ...section('自分がしたことで、隠していること（話すかどうかは自分しだい）', secretsOf(sim, self)),

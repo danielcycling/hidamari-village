@@ -54,6 +54,11 @@ interface SavedResident {
   leaving: string | null;
   temptation?: { text: string; until: number };
   seen?: Resident['seen'];
+  wish?: string;
+  wishHistory?: { day: number; text: string }[];
+  homeLevel?: number;
+  satisfaction?: number;
+  satisfactionNotes?: string[];
 }
 
 export interface SaveData {
@@ -120,6 +125,11 @@ export function serialize(sim: Simulation, autoGod: boolean): SaveData {
       leaving: r.leaving,
       temptation: r.temptation,
       seen: r.seen,
+      wish: r.wish,
+      wishHistory: r.wishHistory,
+      homeLevel: r.homeLevel,
+      satisfaction: r.satisfaction,
+      satisfactionNotes: r.satisfactionNotes,
     })),
     graves: sim.graves,
     estates: sim.estates,
@@ -196,6 +206,11 @@ export function restore(sim: Simulation, data: SaveData): void {
       leaving: saved.leaving ?? null,
       temptation: saved.temptation,
       seen: saved.seen,
+      wish: saved.wish,
+      wishHistory: saved.wishHistory,
+      homeLevel: saved.homeLevel,
+      satisfaction: saved.satisfaction,
+      satisfactionNotes: saved.satisfactionNotes,
     });
   }
   replace(sim.graves, data.graves);

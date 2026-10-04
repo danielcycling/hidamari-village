@@ -9,7 +9,8 @@ export type Tile =
   | 'field'
   | 'building'
   | 'fountain'
-  | 'dock';
+  | 'dock'
+  | 'woods';
 
 export interface Point {
   x: number;
@@ -26,7 +27,7 @@ export interface Rect {
 export type PlaceKind = 'home' | 'facility' | 'public';
 
 /** 設備でできること */
-export type FacilityUse = 'farm' | 'fish' | 'bake' | 'cook' | 'market' | 'hall';
+export type FacilityUse = 'farm' | 'fish' | 'bake' | 'cook' | 'market' | 'hall' | 'chop';
 
 export interface Building {
   rect: Rect;

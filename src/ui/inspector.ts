@@ -1,7 +1,7 @@
 import { hungerLabel, knowledgeOf, secretsOf } from '../ai/prompt';
 import { countItem, ITEM_IDS, ITEMS, SKILL_IDS, SKILLS } from '../world/economy';
 import { ACTIONS } from '../world/planner';
-import type { Resident, Simulation } from '../world/sim';
+import { HOME_LEVEL_NAMES, satisfactionLabel, type Resident, type Simulation } from '../world/sim';
 import { avatar } from './avatar';
 import { affinityColor, formatAffinity } from './relationGraph';
 
@@ -71,7 +71,12 @@ export class Inspector {
     section.append(
       meter('満腹度', r.satiety, 'satiety', `${Math.round(r.satiety)}（${hungerLabel(r.satiety)}）`),
       meter('体力', r.health, 'health', `${Math.round(Math.max(0, r.health))}`),
-      el('p', 'mind-money', `所持金 ${r.money}G`),
+      el('p', 'mind-money', `所持金 ${r.money}G・${HOME_LEVEL_NAMES[r.homeLevel ?? 0]}`),
+      el(
+        'p',
+        'mind-money',
+        `暮らしの満足：${satisfactionLabel(r.satisfaction ?? 50)}（${Math.round(r.satisfaction ?? 50)}）${r.satisfactionNotes?.length ? `　${r.satisfactionNotes.join('・')}` : ''}`,
+      ),
     );
     return section;
   }
@@ -82,6 +87,7 @@ export class Inspector {
       el('h4', '', '自己像'),
       el('p', r.selfImage ? 'self-image' : 'mind-empty', r.selfImage || 'まだ自分がどんな人間なのか、分かっていない。'),
     );
+    if (r.wish) section.append(el('p', 'wish', `望み：${r.wish}`));
     const past = r.selfImageHistory.slice(0, -1).reverse();
     if (past.length > 0) {
       const list = el('ol', 'self-history');

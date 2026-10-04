@@ -44,6 +44,8 @@ const PLAZA: Rect = { x: 14, y: 9, w: 9, h: 7 };
 const FIELD: Rect = { x: 35, y: 15, w: 4, h: 5 };
 const FISHING: Rect = { x: 29, y: 13, w: 3, h: 3 };
 const FOUNTAIN: Rect = { x: 17, y: 10, w: 2, h: 2 };
+/** 村の北のはずれの森（木を切る場所） */
+const FOREST: Rect = { x: 5, y: 0, w: 6, h: 3 };
 
 export function generateMap(seed: number): WorldMap {
   const rng = mulberry32(seed);
@@ -73,6 +75,7 @@ export function generateMap(seed: number): WorldMap {
   fill(PLAZA, 'stone');
   fill(FOUNTAIN, 'fountain');
   fill(FIELD, 'field');
+  fill(FOREST, 'woods');
   fill({ x: FISHING.x + FISHING.w - 1, y: FISHING.y, w: 1, h: FISHING.h }, 'dock');
 
   // 建物と、入口から大通りへの小道
@@ -111,6 +114,10 @@ export function generateMap(seed: number): WorldMap {
   for (let y = MAIN_ROAD_Y + 1; y <= fieldSpot.y; y++) lay(fieldSpot.x, y);
   places.gate = { id: 'gate', name: '村の入り口', kind: 'public', spot: VILLAGE_ENTRANCE };
   places.field = { id: 'field', name: '畑', kind: 'facility', use: 'farm', capacity: 4, spot: fieldSpot, area: FIELD };
+  // 森へは、パン焼き小屋の東を北へのびる小道で行く
+  const forestSpot = { x: FOREST.x + FOREST.w, y: FOREST.y + FOREST.h - 1 };
+  for (let y = forestSpot.y; y < MAIN_ROAD_Y; y++) lay(forestSpot.x, y);
+  places.forest = { id: 'forest', name: '森', kind: 'facility', use: 'chop', capacity: 3, spot: forestSpot, area: FOREST };
 
   scatterNature(rng, tiles, get, set);
   clearBlockedRoutes(tiles, Object.values(places).map((p) => p.spot));
@@ -128,7 +135,7 @@ function scatterNature(
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         const t = get(x + dx, y + dy);
-        if (t === 'building' || t === 'path' || t === 'stone' || t === 'bridge' || t === 'field' || t === 'dock') return true;
+        if (t === 'building' || t === 'path' || t === 'stone' || t === 'bridge' || t === 'field' || t === 'dock' || t === 'woods') return true;
       }
     }
     return false;

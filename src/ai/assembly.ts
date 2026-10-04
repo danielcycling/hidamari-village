@@ -1,4 +1,4 @@
-import type { Assembly, AssemblyResult, ProposalKind, Resident, Simulation } from '../world/sim';
+import { HOME_LEVEL_NAMES, type Assembly, type AssemblyResult, type ProposalKind, type Resident, type Simulation } from '../world/sim';
 import type { ChatMessage, OllamaClient } from './llm';
 import { affinityLabel, hungerLabel, knowledgeOf, secretsOf } from './prompt';
 
@@ -11,6 +11,7 @@ const SYSTEM = `あなたは小さな村の集会の記録係です。村人全�
 - 各人が知っているのは、その人の欄に書かれていることだけ。ほかの人の欄の秘密や出来事を、その人は知らない。
 - 自分の秘密がばれそうなら、話をそらす・黙る・別の人に矛先を向けることもありうる。
 - 無理に全員一致にしない。好き嫌い・損得・恐れ・正義感で、賛否が割れるのは普通のこと。
+- 立派な家に住み一目置かれている人の意見には、ほかの人が流されやすい。逆に反感を買うこともある。
 - 話し合いの結果、提案を1つにまとめる。kind は次のどれか：
   - exile: target を村から追放する
   - fine: target に罰金（amount G）を科す。beneficiary は受け取る人（いなければ空。村のみんなで分ける）
@@ -37,7 +38,9 @@ function personSection(sim: Simulation, r: Resident, a: Assembly): string {
   return [
     `【${r.profile.name}】`,
     `自己像: ${r.selfImage || 'まだ自分がどんな人間なのか、よく分かっていない'}`,
+    ...(r.wish ? [`望み: ${r.wish}`] : []),
     `状態: ${hungerLabel(r.satiety)}、体力${Math.round(r.health)}、所持金${r.money}G`,
+    ...((r.homeLevel ?? 0) > 0 ? [`住まい: ${HOME_LEVEL_NAMES[r.homeLevel ?? 0]}（村の人から一目置かれている）`] : []),
     ...[rel(a.callerId), rel(a.targetId)].filter(Boolean),
     ...(known.length ? ['知っていること:', ...known.map((l) => `- ${l}`)] : []),
     ...(secrets.length ? ['隠していること（本人しか知らない）:', ...secrets.map((l) => `- ${l}`)] : []),

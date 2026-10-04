@@ -1,6 +1,6 @@
 import { foodValue, ITEMS } from '../world/economy';
 import { ACTIONS, DAILY_NEED } from '../world/planner';
-import type { Deed, Simulation } from '../world/sim';
+import { lootText, type Deed, type Simulation } from '../world/sim';
 import { CONDITIONS, WEATHER } from '../world/weather';
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = '') => {
@@ -14,14 +14,10 @@ const DEED_TEXT: Record<Deed['kind'], (d: Deed) => string> = {
   steal: (d) => (d.success ? `${d.victimName}から${loot(d)}を盗んだ` : `${d.victimName}から盗もうとしたが、何もなかった`),
   rob: (d) => (d.success && loot(d) ? `${d.victimName}から${loot(d)}を力ずくで奪った` : `${d.victimName}から奪おうとして失敗した`),
   attack: (d) => `${d.victimName}を殴った（${d.damage ?? 0}のけが）`,
-  kill: (d) => (d.success ? `${d.victimName}を殺した` : `${d.victimName}を殺そうとしたが、逃げられた`),
+  kill: (d) => (d.success ? `${d.victimName}を殺し${loot(d) ? `、${loot(d)}を奪った` : 'た'}` : `${d.victimName}を殺そうとしたが、逃げられた`),
 };
 
-function loot(d: Deed): string {
-  if (d.item) return `${ITEMS[d.item].name}${d.qty}個`;
-  if (d.money) return `${d.money}G`;
-  return '';
-}
+const loot = (d: Deed) => lootText(d);
 
 /** 社会タブ：村全体のようす・決まり・集会・事件・貸し借り・お墓を、神の視点でまとめて見る */
 export class SocietyTab {
