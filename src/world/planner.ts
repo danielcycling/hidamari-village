@@ -33,7 +33,8 @@ export type ActionId =
   | 'build'
   | 'scavenge'
   | 'pray'
-  | 'preach';
+  | 'preach'
+  | 'guard';
 
 /** 相手のいるところへ行ってする行動（target が要る） */
 export const TARGETED_ACTIONS: ActionId[] = ['visit', 'steal', 'rob', 'attack', 'kill'];
@@ -68,6 +69,8 @@ export const ACTIONS: Record<ActionId, ActionDef> = {
   // 天の声を知っている人だけ：祈る・説く
   pray: { label: '祈る', place: 'home' },
   preach: { label: '天の声を説く', place: 'plaza' },
+  // 村の入り口で見張る（盗賊が来たときに追い払う）
+  guard: { label: '見張り', place: 'gate' },
   sell: { label: '市場で売る', place: 'plaza' },
   buy: { label: '市場で買う', place: 'plaza' },
   // 相手のいる場所へ行く（場所は相手しだい）

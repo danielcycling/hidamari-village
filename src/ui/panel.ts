@@ -7,7 +7,7 @@ import { Inspector } from './inspector';
 import { SocietyTab } from './societyTab';
 import { RelationGraph } from './relationGraph';
 import type { LogEntry, Resident, Simulation } from '../world/sim';
-import { CONDITIONS, WEATHER, type WeatherKind } from '../world/weather';
+import { CONDITIONS, seasonOf, SEASONS, WEATHER, type WeatherKind } from '../world/weather';
 
 const WEATHER_ICONS: Record<WeatherKind, string> = { clear: '☀', cloudy: '☁', rain: '☂', storm: '⛈' };
 
@@ -85,7 +85,8 @@ export class Panel {
     this.clockEl.textContent = this.sim.clock.format();
     const sky = WEATHER[this.sim.weather.kind];
     const conds = this.sim.conditions.map((c) => CONDITIONS[c.kind].name);
-    const text = [`${WEATHER_ICONS[this.sim.weather.kind]} ${sky.name}`, ...conds].join('・');
+    const season = SEASONS[seasonOf(this.sim.clock.day)];
+    const text = [`${season.icon}${season.name}`, `${WEATHER_ICONS[this.sim.weather.kind]} ${sky.name}`, ...conds].join('・');
     if (this.weatherEl.textContent !== text) this.weatherEl.textContent = text;
     this.weatherEl.title = this.sim.describeWeather('now');
     for (const [id, li] of this.itemEls) {

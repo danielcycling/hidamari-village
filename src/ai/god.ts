@@ -20,6 +20,7 @@ export const PRESETS: GodPreset[] = [
   { id: 'drought', icon: '🌵', label: '日照りにする', run: (sim) => sim.startCondition('drought') },
   { id: 'poor_catch', icon: '🎣', label: '不漁にする', run: (sim) => sim.startCondition('poor_catch') },
   { id: 'bounty', icon: '🌾', label: '豊作にする', run: (sim) => sim.startCondition('bounty') },
+  { id: 'raid', icon: '🗡', label: '盗賊が来る', run: (sim) => sim.warnRaid(sim.clock.hourOfDay < 17 ? sim.clock.day : sim.clock.day + 1) },
   { id: 'good_catch', icon: '🐟', label: '豊漁にする', run: (sim) => sim.startCondition('good_catch') },
   {
     id: 'festival',

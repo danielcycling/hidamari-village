@@ -78,6 +78,7 @@ export interface SaveData {
   deeds?: Deed[];
   assemblies?: Assembly[];
   prayers?: Simulation['prayers'];
+  raid?: Simulation['raid'];
   laws?: Law[];
   assemblySeq?: number;
   lawSeq?: number;
@@ -144,6 +145,7 @@ export function serialize(sim: Simulation, autoGod: boolean): SaveData {
     deeds: sim.deeds,
     assemblies: sim.assemblies,
     prayers: sim.prayers,
+    raid: sim.raid,
     laws: sim.laws,
     assemblySeq: sim.assemblySeq,
     lawSeq: sim.lawSeq,
@@ -234,6 +236,7 @@ export function restore(sim: Simulation, data: SaveData): void {
   );
   replace(sim.laws, data.laws ?? []);
   replace(sim.prayers, data.prayers ?? []);
+  sim.raid = data.raid ?? null;
   sim.assemblySeq = data.assemblySeq ?? 0;
   sim.lawSeq = data.lawSeq ?? 0;
   sim.deedSeq = data.deedSeq ?? 0;

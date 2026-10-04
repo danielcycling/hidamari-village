@@ -2,7 +2,12 @@ import { Emitter } from '../core/emitter';
 import { mulberry32, randInt, type Rng } from '../core/rng';
 import {
   CONDITIONS,
+  daysLeftInSeason,
   FORECAST_ACCURACY,
+  nextSeason,
+  SEASON_DAYS,
+  seasonOf,
+  SEASONS,
   isWet,
   productionFactor,
   rollCondition,
@@ -105,6 +110,14 @@ const BUY_INTERVAL = 15;
 export const PLANNING_HOUR = 21;
 /** 新入村民が来るかどうかを判定する時刻（時） */
 const IMMIGRATION_HOUR = 10;
+/** 盗賊：来はじめる日・1日に来る確率（冬はさらに上がる）・来る時刻・追い払えなかったときに奪われる割合 */
+const RAID_FIRST_DAY = 3;
+const RAID_CHANCE = 0.05;
+const RAID_WINTER_BONUS = 0.06;
+const RAID_HOUR = 20;
+const RAID_TAKE = 0.5;
+/** 盗賊を追い払った見張りに、村の人が寄せる好感度 */
+const GUARD_RESPECT = 8;
 /** 覚えておく祈りの数 */
 const MAX_PRAYERS = 30;
 /** 人づてに伝わるときに、話が変わる確率（また聞きのとき・自分で見たとき） */
@@ -633,6 +646,8 @@ export class Simulation {
   readonly employments: Employment[] = [];
   readonly deliveries: Delivery[] = [];
   dealSeq = 0;
+  /** やってくる盗賊（その日の夜に来る。前の日に知らせがある） */
+  raid: { day: number } | null = null;
   /** 村人の祈り（神さまである観察者に届く） */
   readonly prayers: { day: number; time: string; residentId: string; name: string; text: string }[] = [];
   /** 村の集会（予定・済み） */
@@ -1069,6 +1084,7 @@ export class Simulation {
       for (const r of [...this.residents]) if (r.plan?.day !== this.clock.day) this.makePlan(r);
     }
     if (h >= WEATHER_HOUR && h < WEATHER_HOUR + 1) this.startDayWeather();
+    if (h >= RAID_HOUR && h < RAID_HOUR + 1 && this.raid?.day === this.clock.day) this.resolveRaid();
     if (h >= IMMIGRATION_HOUR && h < IMMIGRATION_HOUR + 1) this.tryImmigration();
     if (h >= PLANNING_HOUR && this.lastEveningDay !== this.clock.day) {
       this.lastEveningDay = this.clock.day;
@@ -1298,10 +1314,15 @@ export class Simulation {
   /** 朝5時：今日の空模様と、数日続く出来事を決める */
   private startDayWeather() {
     const day = this.clock.day;
+    if ((day - 1) % SEASON_DAYS === 0 && day > 1) {
+      const season = SEASONS[seasonOf(day)];
+      this.announce(`${season.name}になった${season.note ? `。${season.note}` : ''}`, 'system');
+    }
     for (const c of this.conditions.filter((c) => c.untilDay <= day)) {
       this.conditions.splice(this.conditions.indexOf(c), 1);
       this.announce(CONDITIONS[c.kind].end, 'system');
     }
+    this.maybeScheduleRaid(day);
     const fresh = rollCondition(this.weatherRng, this.conditions, day);
     if (fresh) {
       this.conditions.push(fresh);
@@ -1314,6 +1335,69 @@ export class Simulation {
     else if (this.dayWeather === 'rain') this.announce('朝から雨が降っている', 'system');
   }
 
+  /**
+   * 盗賊がやってくるか。冬や、村に蓄えがあるときほど来やすい。来る前の日に村人の目に入る
+   */
+  private maybeScheduleRaid(day: number) {
+    if (this.raid || day < RAID_FIRST_DAY) return;
+    const stock = this.residents.reduce((n, r) => n + foodValue(r.inventory), 0);
+    const chance = RAID_CHANCE + (seasonOf(day) === 'winter' ? RAID_WINTER_BONUS : 0) + Math.min(0.05, stock / 4000);
+    if (this.weatherRng() >= chance) return;
+    this.warnRaid(day + 1);
+  }
+
+  /** 盗賊が来ると知らせる（神さまが起こすときもここから） */
+  warnRaid(day = this.clock.day + 1): void {
+    this.raid = { day };
+    this.announce(
+      `村の外に、見慣れない男たちがうろついているのが見えた。盗賊かもしれない。${day === this.clock.day ? '今夜' : '明日の夜'}あたり、村に来るかもしれない`,
+      'system',
+    );
+  }
+
+  /** 夜、盗賊がやってくる。見張りが多く元気なら追い払える。だめなら村じゅうの物が奪われる */
+  private resolveRaid() {
+    this.raid = null;
+    const gate = this.map.places.gate.spot;
+    const guards = this.residents.filter(
+      (r) => r.action === 'guard' && (r.placeId === 'gate' || Math.hypot(r.x - gate.x, r.y - gate.y) <= 3),
+    );
+    const winter = seasonOf(this.clock.day) === 'winter';
+    const bandits = 1.2 + this.weatherRng() * 1.0 + (winter ? 0.5 : 0);
+    const defense = guards.reduce((n, g) => n + (Math.max(0, g.health) / 100) * (0.8 + this.rng() * 0.4), 0);
+    const names = guards.map((g) => g.profile.name).join('、');
+    if (guards.length > 0 && defense >= bandits) {
+      for (const g of guards) {
+        this.hurt(g, Math.round(5 + this.rng() * 10));
+        this.remember(g, '見張りに立ち、盗賊を追い払った');
+        for (const o of this.residents) {
+          if (o !== g) this.feel(o, g, GUARD_RESPECT, `${this.clock.day}日目、見張りに立って盗賊を追い払ってくれた`);
+        }
+      }
+      this.announce(`盗賊がやってきたが、見張りの${names}が追い払った`, 'system');
+      for (const o of this.residents) if (!guards.includes(o)) this.remember(o, `盗賊が来たが、${names}が追い払ってくれた`);
+      return;
+    }
+    // 追い払えなかった：見張りはけがをし、村じゅうの持ち物が奪われる（お金は村の外へは出ない）
+    for (const g of guards) this.hurt(g, Math.round(15 + this.rng() * 15));
+    const lost: Partial<Record<ItemId, number>> = {};
+    for (const r of [...this.residents]) {
+      for (const id of ITEM_IDS) {
+        const have = countItem(r.inventory, id);
+        const take = Math.floor(have * RAID_TAKE);
+        if (take <= 0) continue;
+        takeItem(r.inventory, id, take);
+        lost[id] = (lost[id] ?? 0) + take;
+      }
+    }
+    const what = ITEM_IDS.filter((id) => lost[id]).map((id) => `${ITEMS[id].name}${lost[id]}個`).join('・') || '少しの物';
+    this.announce(
+      `盗賊が村を襲い、${what}を奪っていった${guards.length ? `（見張りの${names}は追い払えず、けがをした）` : '（見張りは誰もいなかった）'}`,
+      'system',
+    );
+    for (const r of this.residents) this.remember(r, `盗賊に襲われ、村じゅうの物が奪われた${guards.length ? '' : '。誰も見張りに立っていなかった'}`);
+  }
+
   /** 夜：明日の空模様の見立て（外れることもある） */
   private makeForecast() {
     this.forecast = rollWeather(this.weatherRng, this.conditions);
@@ -1321,16 +1405,32 @@ export class Simulation {
 
   /** 今の空模様と出来事による、畑仕事・釣りの倍率 */
   productionFactor(domain: 'farm' | 'fish'): number {
-    return productionFactor(this.weather.kind, this.conditions, domain);
+    return productionFactor(this.weather.kind, this.conditions, domain) * SEASONS[seasonOf(this.clock.day)][domain];
   }
 
   /** 計画づくり用：明日の見立てでの倍率 */
   forecastFactor(domain: 'farm' | 'fish'): number {
-    return productionFactor(this.forecast, this.conditions, domain);
+    // 計画は夜に立てるので、明日の季節で見積もる
+    return productionFactor(this.forecast, this.conditions, domain) * SEASONS[seasonOf(this.clock.day + 1)][domain];
+  }
+
+  /** 今の季節と、次の季節まであと何日か（村人みんなが分かること） */
+  describeSeason(which: 'now' | 'tomorrow'): string {
+    const day = which === 'now' ? this.clock.day : this.clock.day + 1;
+    const season = seasonOf(day);
+    const left = daysLeftInSeason(day);
+    const next = nextSeason(season);
+    const note = SEASONS[season].note ? `。${SEASONS[season].note}` : '';
+    const coming = SEASONS[next].note ? `（${SEASONS[next].note}）` : '';
+    return `${which === 'now' ? '今' : '明日'}は${SEASONS[season].name}${note}。${left === 1 ? `その翌日から${SEASONS[next].name}になる` : `あと${left}日で${SEASONS[next].name}になる`}${coming}`;
   }
 
   /** 村人が知っている空模様と出来事（プロンプト用） */
   describeWeather(which: 'now' | 'tomorrow'): string {
+    return `${this.describeSeason(which)}。${this.describeSky(which)}`;
+  }
+
+  private describeSky(which: 'now' | 'tomorrow'): string {
     const kind = which === 'now' ? this.weather.kind : this.forecast;
     const sky = which === 'now' ? `今の空: ${WEATHER[kind].name}` : `明日の空模様の見立て: ${WEATHER[kind].name}になりそう（外れることもある）`;
     const note = WEATHER[kind].note ? `。${WEATHER[kind].note}` : '';
@@ -1395,7 +1495,8 @@ export class Simulation {
   private updateBody(r: Resident, dt: number) {
     const asleep = r.action === 'sleep' && r.indoors;
     const before = r.satiety;
-    r.satiety = Math.max(0, r.satiety - (asleep ? SATIETY_LOSS_ASLEEP : SATIETY_LOSS_AWAKE) * dt);
+    const cold = SEASONS[seasonOf(this.clock.day)].hunger;
+    r.satiety = Math.max(0, r.satiety - (asleep ? SATIETY_LOSS_ASLEEP : SATIETY_LOSS_AWAKE) * cold * dt);
     if (r.satiety <= 0) r.health -= STARVING_HEALTH_LOSS * dt;
     else if (r.satiety >= 50) r.health = Math.min(100, r.health + HEALTH_RECOVERY * dt);
 

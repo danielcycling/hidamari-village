@@ -111,3 +111,39 @@ export function productionFactor(kind: WeatherKind, conditions: Condition[], dom
 }
 
 export const isWet = (kind: WeatherKind) => kind === 'rain' || kind === 'storm';
+
+// ───────────── 季節 ─────────────
+
+export type Season = 'spring' | 'summer' | 'autumn' | 'winter';
+
+/** 1つの季節の長さ（日） */
+export const SEASON_DAYS = 3;
+const SEASON_ORDER: Season[] = ['spring', 'summer', 'autumn', 'winter'];
+
+export const SEASONS: Record<Season, { name: string; icon: string; farm: number; fish: number; hunger: number; note: string }> = {
+  spring: { name: '春', icon: '🌸', farm: 1, fish: 1, hunger: 1, note: '' },
+  summer: { name: '夏', icon: '🌻', farm: 1.1, fish: 1, hunger: 1, note: '' },
+  autumn: { name: '秋', icon: '🍁', farm: 1.3, fish: 1, hunger: 1, note: '秋は畑の実りが多い' },
+  winter: {
+    name: '冬',
+    icon: '❄',
+    farm: 0.2,
+    fish: 0.5,
+    hunger: 1.25,
+    note: '冬は畑がほとんど実らず、魚も釣れにくい。寒さでお腹も減りやすい',
+  },
+};
+
+/** その日の季節（1日目は春のはじまり） */
+export function seasonOf(day: number): Season {
+  return SEASON_ORDER[Math.floor((day - 1) / SEASON_DAYS) % SEASON_ORDER.length];
+}
+
+/** 今の季節があと何日続くか（今日を含む） */
+export function daysLeftInSeason(day: number): number {
+  return SEASON_DAYS - ((day - 1) % SEASON_DAYS);
+}
+
+export function nextSeason(season: Season): Season {
+  return SEASON_ORDER[(SEASON_ORDER.indexOf(season) + 1) % SEASON_ORDER.length];
+}
