@@ -61,6 +61,7 @@ import {
   TARGETED_ACTIONS,
   type ActionId,
   type CrimeAction,
+  type DeedKind,
   type DailyPlan,
   type PlanBlock,
   type WorkAction,
@@ -104,6 +105,10 @@ const BUY_INTERVAL = 15;
 export const PLANNING_HOUR = 21;
 /** 新入村民が来るかどうかを判定する時刻（時） */
 const IMMIGRATION_HOUR = 10;
+/** 覚えておく祈りの数 */
+const MAX_PRAYERS = 30;
+/** 人づてに伝わるときに、話が変わる確率（また聞きのとき・自分で見たとき） */
+const RUMOR_DRIFT = { heard: 0.35, firsthand: 0.08 };
 /** 村の集会の時間（集会所） */
 const ASSEMBLY_FROM = 18;
 const ASSEMBLY_TO = 19.5;
@@ -134,21 +139,15 @@ const STEAL_NOTICE = 0.35;
 const STEAL_WITNESS = 0.5;
 const VIOLENCE_WITNESS = 0.9;
 /** やられた人・見た人の、相手への気持ちの下がり方 */
-const VICTIM_GRUDGE: Record<CrimeAction, number> = { steal: 30, rob: 40, attack: 50, kill: 70 };
-const WITNESS_GRUDGE: Record<CrimeAction, number> = { steal: 15, rob: 20, attack: 25, kill: 50 };
-/** 「AがB〇〇」の〇〇（したこととして話すとき） */
-const DEED_DONE: Record<CrimeAction, string> = {
-  steal: 'から物を盗んだ',
-  rob: 'から力ずくで奪った',
-  attack: 'を殴った',
-  kill: 'を殺した',
-};
+const VICTIM_GRUDGE: Record<DeedKind, number> = { steal: 30, rob: 40, attack: 50, kill: 70, loot: 0 };
+const WITNESS_GRUDGE: Record<DeedKind, number> = { steal: 15, rob: 20, attack: 25, kill: 50, loot: 8 };
 /** 「AがB〇〇」の〇〇 */
-const DEED_LABEL: Record<CrimeAction, string> = {
+const DEED_LABEL: Record<DeedKind, string> = {
   steal: 'から物を盗む',
   rob: 'から力ずくで奪う',
   attack: 'を殴る',
   kill: 'を殺す',
+  loot: 'の空き家から遺品を持ち出す',
 };
 
 /** その日の空模様が決まる時刻 */
@@ -263,6 +262,8 @@ export interface Resident {
   visited?: { targetId: string; until: number };
   /** 危機の判断をLLMに頼んだ時刻 */
   crisisRequestedAt?: number;
+  /** 天の声を聞いた回数・天の声のことを説かれた回数（信仰の芽） */
+  faith?: { heard: number; sermons: number };
   /** 悪魔のささやき（心の奥の声）と、それが消える時刻 */
   temptation?: { text: string; until: number };
   /** 最後に会ったときに見た、相手の様子と持っていた食べ物（人の持ち物は、見たことしか分からない） */
@@ -335,7 +336,7 @@ export type AgreementType = 'trade' | 'gift' | 'loan' | 'repay' | 'hire' | 'quit
 /** 誰かが誰かにした非行・暴力の記録。誰が知っているかも持つ（秘密はここから生まれる） */
 export interface Deed {
   id: number;
-  kind: CrimeAction;
+  kind: DeedKind;
   actorId: string;
   actorName: string;
   victimId: string;
@@ -361,6 +362,11 @@ export interface Deed {
   hushed: string[];
   /** 広場で言いふらされたなどで、村のみんなが聞いている */
   public: boolean;
+  /**
+   * 人づてに聞いた人が信じている話（変わってしまったもの）。
+   * 犯人が別の人になっていたり、取られた量が大げさになっていたりする
+   */
+  rumors?: Record<string, { actorId: string; actorName: string; exaggerated?: boolean }>;
 }
 
 /** 盗まれた人が、あとで物やお金が減っていることに気づく予定 */
@@ -402,6 +408,8 @@ export interface Estate {
   ownerName: string;
   money: number;
   inventory: Inventory;
+  /** 亡くなった（出ていった）日 */
+  day?: number;
 }
 
 export interface DialogueLine {
@@ -472,7 +480,8 @@ export interface LogEntry {
     | 'plan'
     | 'deal'
     | 'crime'
-    | 'assembly';
+    | 'assembly'
+    | 'prayer';
   speakerId?: string;
   /** 同じ会話のログをまとめて表示するための番号 */
   conversationId?: number;
@@ -531,7 +540,7 @@ export interface Assembly {
   result?: AssemblyResult;
 }
 
-export type ProposalKind = 'exile' | 'fine' | 'rule' | 'repeal' | 'none';
+export type ProposalKind = 'exile' | 'fine' | 'rule' | 'repeal' | 'estate' | 'none';
 
 export interface AssemblyResult {
   speeches: { speakerId: string; text: string }[];
@@ -546,6 +555,8 @@ export interface AssemblyResult {
     title?: string;
     text?: string;
     lawId?: number;
+    /** 遺品の分け方：誰の遺品か（空き家の id） */
+    estateHomeId?: string;
   };
   votes: { voterId: string; yes: boolean; reason: string }[];
   passed: boolean;
@@ -622,6 +633,8 @@ export class Simulation {
   readonly employments: Employment[] = [];
   readonly deliveries: Delivery[] = [];
   dealSeq = 0;
+  /** 村人の祈り（神さまである観察者に届く） */
+  readonly prayers: { day: number; time: string; residentId: string; name: string; text: string }[] = [];
   /** 村の集会（予定・済み） */
   readonly assemblies: Assembly[] = [];
   /** 村の決まり */
@@ -858,6 +871,7 @@ export class Simulation {
 
   /** 本人だけに聞こえる「天の声」 */
   whisper(r: Resident, text: string): void {
+    r.faith = { heard: (r.faith?.heard ?? 0) + 1, sermons: r.faith?.sermons ?? 0 };
     this.remember(r, `天の声がささやいた「${text}」`);
     this.log(`${r.profile.name}に天の声がささやいた「${text}」`, 'god');
   }
@@ -911,6 +925,16 @@ export class Simulation {
     const r = this.createResident(profile, { money, food, at: entrance, indoors: false });
     this.map.places[profile.homeId].name = `${profile.name}の家`;
     this.remember(r, 'ひだまり村にやってきた。知り合いはまだいない');
+    // 空き家に前の住人の物が残っていれば、住む人のものになる
+    const left = this.estates[profile.homeId];
+    if (left && (left.money > 0 || left.inventory.length > 0)) {
+      const what = lootText({ items: left.inventory.map((s) => ({ item: s.item, qty: s.qty })), money: left.money });
+      for (const st of left.inventory) addItem(r.inventory, st.item, st.qty, this.clock.minutes, st.expiresAt);
+      r.money += left.money;
+      delete this.estates[profile.homeId];
+      this.remember(r, `住むことになった家に、前の住人${left.ownerName}の物が残っていた（${what}）`);
+      this.log(`${profile.name}は、空き家に残っていた${left.ownerName}の遺品（${what}）を手に入れた`, 'life');
+    }
     this.announce(`${profile.name}という人が村の外からやってきて、空き家に住むことになった`, 'life');
     this.makePlan(r);
     this.events.emit('residentAdded', r);
@@ -986,7 +1010,7 @@ export class Simulation {
     };
     this.graves.push(grave);
     // 残したものは家に置かれたまま（誰のものでもなくなる）
-    this.estates[home.id] = { ownerName: r.profile.name, money: r.money, inventory: r.inventory };
+    this.estates[home.id] = { ownerName: r.profile.name, money: r.money, inventory: r.inventory, day: this.clock.day };
     home.name = '空き家';
     for (const o of this.residents) this.remember(o, announcement);
     this.announce(announcement, 'death');
@@ -998,7 +1022,7 @@ export class Simulation {
     if (r.conversation) this.finishConversation(r.conversation);
     this.residents.splice(this.residents.indexOf(r), 1);
     const home = this.map.places[r.profile.homeId];
-    this.estates[home.id] = { ownerName: r.profile.name, money: r.money, inventory: r.inventory };
+    this.estates[home.id] = { ownerName: r.profile.name, money: r.money, inventory: r.inventory, day: this.clock.day };
     home.name = '空き家';
     for (const o of this.residents) this.remember(o, `${r.profile.name}が村を出て行った`);
     this.announce(`${r.profile.name}が村を出て行った（${r.leaving}）`, 'life');
@@ -1535,6 +1559,19 @@ export class Simulation {
       }
       action = 'wander';
     }
+    if (action === 'scavenge') {
+      const est = target ? this.estates[target] : undefined;
+      const done = r.visited && r.visited.targetId === `estate:${target}` && now < r.visited.until;
+      // はた目にはぶらついているだけに見える
+      if (est && !done) return { placeId: target!, action, label: 'ぶらぶらする', block, target, purpose };
+      action = 'wander';
+    }
+    if (action === 'pray' || action === 'preach') {
+      const done = r.visited && r.visited.targetId === action && now < r.visited.until;
+      if (!purpose || done) action = action === 'pray' ? 'rest' : 'wander';
+      else if (action === 'pray') return { placeId: home, action, label: '祈っている', block, target, purpose };
+      else return { placeId: 'plaza', action, label: '天の声を説いている', block, target, purpose };
+    }
     if (action === 'accuse' || action === 'call_assembly') {
       const done = r.visited && r.visited.targetId === action && now < r.visited.until;
       if (!purpose || done) action = 'wander';
@@ -1597,6 +1634,15 @@ export class Simulation {
         break;
       case 'call_assembly':
         this.callAssembly(r, task);
+        break;
+      case 'scavenge':
+        this.scavenge(r, task);
+        break;
+      case 'pray':
+        this.pray(r, task);
+        break;
+      case 'preach':
+        this.preach(r, task);
         break;
       case 'sell':
         if (!r.shop) this.openShop(r, task.block);
@@ -1932,12 +1978,87 @@ export class Simulation {
   }
 
   /** その場に居合わせて、見ていたかもしれない人 */
-  private bystanders(actor: Resident, victim: Resident): Resident[] {
+  private bystanders(actor: Resident, victim?: Resident): Resident[] {
+    const door = actor.indoors && actor.placeId ? this.map.places[actor.placeId]?.spot : undefined;
     return this.residents.filter((o) => {
       if (o === actor || o === victim || o.action === 'sleep' || o.leaving) return false;
-      if (actor.indoors) return o.indoors && o.placeId === actor.placeId;
+      if (actor.indoors) {
+        // 建物の中なら、同じ建物の中の人と、戸口の近くにいた人
+        if (o.indoors) return o.placeId === actor.placeId;
+        return !!door && Math.hypot(o.x - door.x, o.y - door.y) <= 4;
+      }
       return !o.indoors && Math.hypot(o.x - actor.x, o.y - actor.y) <= WITNESS_RANGE;
     });
+  }
+
+  /** 空き家から遺品を持ち出す。誰の物でもないが、見た人には盗みに見えるかもしれない */
+  private scavenge(r: Resident, task: Task) {
+    const homeId = task.target;
+    if (!homeId) return;
+    r.visited = { targetId: `estate:${homeId}`, until: this.taskEnd(r, task) };
+    const est = this.estates[homeId];
+    if (!est || (est.money <= 0 && est.inventory.length === 0)) {
+      this.remember(r, `${est?.ownerName ?? '前の住人'}の空き家に行ったが、もう何も残っていなかった`);
+      return;
+    }
+    const items = est.inventory.map((st) => ({ item: st.item, qty: st.qty }));
+    for (const st of est.inventory) addItem(r.inventory, st.item, st.qty, this.clock.minutes, st.expiresAt);
+    r.money += est.money;
+    const deed: Deed = {
+      id: ++this.deedSeq,
+      kind: 'loot',
+      actorId: r.profile.id,
+      actorName: r.profile.name,
+      victimId: '',
+      victimName: est.ownerName,
+      success: true,
+      items,
+      money: est.money || undefined,
+      day: this.clock.day,
+      time: this.clock.formatTime(),
+      placeName: `${est.ownerName}の空き家`,
+      knownBy: {},
+      actorSawWitness: [],
+      hushed: [],
+      public: false,
+    };
+    est.inventory = [];
+    est.money = 0;
+    const what = lootText(deed);
+    for (const w of this.bystanders(r)) {
+      if (this.rng() >= 0.6) continue;
+      deed.knownBy[w.profile.id] = 'saw';
+      deed.actorSawWitness.push(w.profile.id);
+      this.remember(w, `${r.profile.name}が${est.ownerName}の空き家から物を持ち出すのを見た`);
+      this.feel(w, r, -8, `${this.clock.day}日目、${est.ownerName}の遺品を持ち出していた`);
+    }
+    this.deeds.push(deed);
+    const seen = deed.actorSawWitness.map((id) => this.get(id)?.profile.name).filter(Boolean);
+    this.log(`${r.profile.name}が${est.ownerName}の空き家から遺品（${what}）を持ち出した${seen.length ? `（見ていた人：${seen.join('、')}）` : '（誰にも見られなかった）'}`, 'crime');
+    this.remember(r, `${est.ownerName}の空き家から遺品（${what}）を持ち出した。${seen.length ? `${seen.join('、')}に見られた` : '誰にも見られなかったと思う'}`);
+  }
+
+  /** 祈る：天の声の主（観察者）に届く */
+  private pray(r: Resident, task: Task) {
+    if (!task.purpose) return;
+    r.visited = { targetId: 'pray', until: this.taskEnd(r, task) };
+    this.prayers.push({ day: this.clock.day, time: this.clock.formatTime(), residentId: r.profile.id, name: r.profile.name, text: task.purpose });
+    if (this.prayers.length > MAX_PRAYERS) this.prayers.shift();
+    this.remember(r, `天に祈った「${task.purpose}」`);
+    this.log(`${r.profile.name}が祈った「${task.purpose}」`, 'prayer', { speakerId: r.profile.id });
+  }
+
+  /** 広場で天の声のことを説く。聞いた人は信じるかもしれないし、笑うかもしれない */
+  private preach(r: Resident, task: Task) {
+    if (!task.purpose) return;
+    r.visited = { targetId: 'preach', until: this.taskEnd(r, task) };
+    const text = `${r.profile.name}が広場で天の声のことを説いている「${task.purpose}」`;
+    this.announce(text, 'life');
+    for (const o of this.residents) {
+      if (o === r) continue;
+      o.faith = { heard: o.faith?.heard ?? 0, sermons: (o.faith?.sermons ?? 0) + 1 };
+      this.remember(o, text);
+    }
   }
 
   /**
@@ -2164,13 +2285,39 @@ export class Simulation {
       if (!fromKnows || d.actorId === to.profile.id || d.knownBy[to.profile.id]) continue;
       d.knownBy[to.profile.id] = 'heard';
       const confessed = d.actorId === from.profile.id;
-      const act = `${d.victimName}${DEED_DONE[d.kind]}`;
-      const text = confessed ? `${from.profile.name}が、自分が${act}と打ち明けた` : `${from.profile.name}から、${d.actorName}が${act}と聞いた`;
+      // 人づてに伝わるうちに、話は少しずつ変わっていく（また聞きほど変わりやすい）
+      const told = this.versionOf(d, from.profile.id);
+      const heard = { ...told };
+      const drift = confessed ? 0 : d.knownBy[from.profile.id] === 'heard' ? RUMOR_DRIFT.heard : RUMOR_DRIFT.firsthand;
+      if (this.rng() < drift) {
+        const blamable = this.residents.filter(
+          (o) => o !== to && o !== from && o.profile.id !== d.victimId && o.profile.id !== told.actorId,
+        );
+        if (this.rng() < 0.5 && blamable.length > 0) {
+          const other = blamable[Math.floor(this.rng() * blamable.length)];
+          heard.actorId = other.profile.id;
+          heard.actorName = other.profile.name;
+        } else {
+          heard.exaggerated = true;
+        }
+      }
+      if (heard.actorId !== d.actorId || heard.exaggerated) (d.rumors ??= {})[to.profile.id] = heard;
+      const act = deedStory(d, heard);
+      const text = confessed ? `${from.profile.name}が、自分が${act}と打ち明けた` : `${from.profile.name}から、${heard.actorName}が${act}と聞いた`;
       this.remember(to, text);
-      this.log(`${to.profile.name}は${text}`, 'crime', { conversationId: conv.id });
-      const actor = this.get(d.actorId);
-      if (actor && !confessed) this.feel(to, actor, -WITNESS_GRUDGE[d.kind] / 2, `${this.clock.day}日目、${d.actorName}が${act}と聞いた`);
+      const twisted = heard.actorId !== d.actorId ? `（本当は${d.actorName}）` : heard.exaggerated ? '（話が大げさになっている）' : '';
+      this.log(`${to.profile.name}は${text}${twisted}`, 'crime', { conversationId: conv.id });
+      // 恨みは、聞いた話の「犯人」に向かう（間違っていても）
+      const blamed = this.get(heard.actorId);
+      if (blamed && !confessed && blamed !== to) {
+        this.feel(to, blamed, -WITNESS_GRUDGE[d.kind] / 2, `${this.clock.day}日目、${heard.actorName}が${act}と聞いた`);
+      }
     }
+  }
+
+  /** その人が信じている、出来事の中身（自分で見た・やられた人は本当のこと、聞いた人は聞いた話） */
+  versionOf(d: Deed, residentId: string): { actorId: string; actorName: string; exaggerated?: boolean } {
+    return d.rumors?.[residentId] ?? { actorId: d.actorId, actorName: d.actorName };
   }
 
   /** その人が知っている、ほかの人の非行（本人がしたものは含まない） */
@@ -2312,6 +2459,24 @@ export class Simulation {
         this.announce(`村の決まりができた：「${law.title}」${law.text && law.text !== law.title ? `（${law.text}）` : ''}`, 'assembly');
         return;
       }
+      case 'estate': {
+        const est = p.estateHomeId ? this.estates[p.estateHomeId] : undefined;
+        if (!est) return;
+        const to = p.beneficiaryId ? this.get(p.beneficiaryId) : undefined;
+        const receivers = to ? [to] : [...this.residents];
+        const what = lootText({ items: est.inventory.map((st) => ({ item: st.item, qty: st.qty })), money: est.money });
+        // 品物は順に配り、お金は等分する（端数は最初の人へ）
+        let i = 0;
+        for (const st of est.inventory) {
+          for (let n = 0; n < st.qty; n++) addItem(receivers[i++ % receivers.length].inventory, st.item, 1, this.clock.minutes, st.expiresAt);
+        }
+        const share = Math.floor(est.money / receivers.length);
+        receivers.forEach((r, k) => (r.money += share + (k === 0 ? est.money - share * receivers.length : 0)));
+        est.inventory = [];
+        est.money = 0;
+        this.announce(`${est.ownerName}の遺品（${what || 'なし'}）は${to ? `${to.profile.name}が受け継ぐ` : '村のみんなで分ける'}ことになった`, 'assembly');
+        return;
+      }
       case 'repeal': {
         const i = this.laws.findIndex((l) => l.id === p.lawId);
         if (i < 0) return;
@@ -2335,6 +2500,11 @@ export class Simulation {
         return `決まり「${p.title ?? ''}」を作る${p.text && p.text !== p.title ? `（${p.text}）` : ''}`;
       case 'repeal':
         return `決まり「${this.laws.find((l) => l.id === p.lawId)?.title ?? `#${p.lawId}`}」を廃止する`;
+      case 'estate': {
+        const owner = p.estateHomeId ? this.estates[p.estateHomeId]?.ownerName : '';
+        const to = p.beneficiaryId ? this.get(p.beneficiaryId)?.profile.name : undefined;
+        return `${owner}の遺品を${to ? `${to}が受け継ぐ` : '村のみんなで分ける'}`;
+      }
       default:
         return '話し合うだけ';
     }
@@ -2835,4 +3005,25 @@ export function satisfactionLabel(n: number): string {
 /** 満足による仕事のはかどり具合（満足0で0.8倍、50で1倍、100で1.2倍） */
 export function moodFactor(satisfaction: number): number {
   return 0.8 + 0.4 * (Math.max(0, Math.min(100, satisfaction)) / 100);
+}
+
+/** 出来事を、聞いた話として言葉にする（「ミズキからパン2個を盗んだ」。大げさな話なら量が増える） */
+export function deedStory(d: Deed, version: { exaggerated?: boolean } = {}): string {
+  const scale = version.exaggerated ? 3 : 1;
+  const loot = lootText({
+    items: (d.items ?? (d.item ? [{ item: d.item, qty: d.qty ?? 1 }] : [])).map((x) => ({ item: x.item, qty: x.qty * scale })),
+    money: d.money ? d.money * scale : undefined,
+  });
+  switch (d.kind) {
+    case 'steal':
+      return loot ? `${d.victimName}から${loot}を盗んだ` : `${d.victimName}から物を盗もうとした`;
+    case 'rob':
+      return loot ? `${d.victimName}から${loot}を力ずくで奪った` : `${d.victimName}から奪おうとした`;
+    case 'attack':
+      return `${d.victimName}を${version.exaggerated ? 'ひどく' : ''}殴った`;
+    case 'kill':
+      return d.success ? `${d.victimName}を殺した` : `${d.victimName}を殺そうとした`;
+    case 'loot':
+      return `${d.victimName}の空き家から遺品${loot ? `（${loot}）` : ''}を持ち出した`;
+  }
 }

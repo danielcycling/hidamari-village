@@ -30,12 +30,17 @@ export type ActionId =
   | 'call_assembly'
   | 'chop'
   | 'brew'
-  | 'build';
+  | 'build'
+  | 'scavenge'
+  | 'pray'
+  | 'preach';
 
 /** 相手のいるところへ行ってする行動（target が要る） */
 export const TARGETED_ACTIONS: ActionId[] = ['visit', 'steal', 'rob', 'attack', 'kill'];
 /** 人に対する非行・暴力 */
 export type CrimeAction = 'steal' | 'rob' | 'attack' | 'kill';
+/** 記録に残る行為（非行・暴力と、遺品の持ち出し） */
+export type DeedKind = CrimeAction | 'loot';
 export const CRIME_ACTIONS: CrimeAction[] = ['steal', 'rob', 'attack', 'kill'];
 
 /** 雇われて働ける仕事 */
@@ -58,6 +63,11 @@ export const ACTIONS: Record<ActionId, ActionDef> = {
   chop: { label: '木を切る', place: 'forest', skill: 'chop' },
   brew: { label: 'お酒を造る', place: 'kitchen', skill: 'cook' },
   build: { label: '家を改築する', place: 'home', skill: 'build' },
+  // 亡くなった人の空き家から遺品を持ち出す（場所は、その家）
+  scavenge: { label: '遺品を持ち出す', place: 'plaza' },
+  // 天の声を知っている人だけ：祈る・説く
+  pray: { label: '祈る', place: 'home' },
+  preach: { label: '天の声を説く', place: 'plaza' },
   sell: { label: '市場で売る', place: 'plaza' },
   buy: { label: '市場で買う', place: 'plaza' },
   // 相手のいる場所へ行く（場所は相手しだい）

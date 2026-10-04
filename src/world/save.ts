@@ -59,6 +59,7 @@ interface SavedResident {
   homeLevel?: number;
   satisfaction?: number;
   satisfactionNotes?: string[];
+  faith?: Resident['faith'];
 }
 
 export interface SaveData {
@@ -76,6 +77,7 @@ export interface SaveData {
   dealSeq?: number;
   deeds?: Deed[];
   assemblies?: Assembly[];
+  prayers?: Simulation['prayers'];
   laws?: Law[];
   assemblySeq?: number;
   lawSeq?: number;
@@ -130,6 +132,7 @@ export function serialize(sim: Simulation, autoGod: boolean): SaveData {
       homeLevel: r.homeLevel,
       satisfaction: r.satisfaction,
       satisfactionNotes: r.satisfactionNotes,
+      faith: r.faith,
     })),
     graves: sim.graves,
     estates: sim.estates,
@@ -140,6 +143,7 @@ export function serialize(sim: Simulation, autoGod: boolean): SaveData {
     dealSeq: sim.dealSeq,
     deeds: sim.deeds,
     assemblies: sim.assemblies,
+    prayers: sim.prayers,
     laws: sim.laws,
     assemblySeq: sim.assemblySeq,
     lawSeq: sim.lawSeq,
@@ -211,6 +215,7 @@ export function restore(sim: Simulation, data: SaveData): void {
       homeLevel: saved.homeLevel,
       satisfaction: saved.satisfaction,
       satisfactionNotes: saved.satisfactionNotes,
+      faith: saved.faith,
     });
   }
   replace(sim.graves, data.graves);
@@ -228,6 +233,7 @@ export function restore(sim: Simulation, data: SaveData): void {
     (data.assemblies ?? []).map((a) => (a.status === 'deliberating' ? { ...a, status: 'done' as const } : a)),
   );
   replace(sim.laws, data.laws ?? []);
+  replace(sim.prayers, data.prayers ?? []);
   sim.assemblySeq = data.assemblySeq ?? 0;
   sim.lawSeq = data.lawSeq ?? 0;
   sim.deedSeq = data.deedSeq ?? 0;

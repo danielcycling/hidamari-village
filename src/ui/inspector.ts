@@ -88,6 +88,9 @@ export class Inspector {
       el('p', r.selfImage ? 'self-image' : 'mind-empty', r.selfImage || 'まだ自分がどんな人間なのか、分かっていない。'),
     );
     if (r.wish) section.append(el('p', 'wish', `望み：${r.wish}`));
+    if (r.faith && (r.faith.heard > 0 || r.faith.sermons > 0)) {
+      section.append(el('p', 'mind-money', `天の声：${r.faith.heard}回聞いた・${r.faith.sermons}回説かれた`));
+    }
     const past = r.selfImageHistory.slice(0, -1).reverse();
     if (past.length > 0) {
       const list = el('ol', 'self-history');

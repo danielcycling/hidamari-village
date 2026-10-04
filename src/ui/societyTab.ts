@@ -15,6 +15,7 @@ const DEED_TEXT: Record<Deed['kind'], (d: Deed) => string> = {
   rob: (d) => (d.success && loot(d) ? `${d.victimName}から${loot(d)}を力ずくで奪った` : `${d.victimName}から奪おうとして失敗した`),
   attack: (d) => `${d.victimName}を殴った（${d.damage ?? 0}のけが）`,
   kill: (d) => (d.success ? `${d.victimName}を殺し${loot(d) ? `、${loot(d)}を奪った` : 'た'}` : `${d.victimName}を殺そうとしたが、逃げられた`),
+  loot: (d) => `${d.victimName}の空き家から遺品${loot(d) ? `（${loot(d)}）` : ''}を持ち出した`,
 };
 
 const loot = (d: Deed) => lootText(d);
@@ -34,6 +35,7 @@ export class SocietyTab {
       this.assemblies(),
       this.deeds(),
       this.ties(),
+      this.estates(),
       this.graves(),
     );
   }
@@ -169,6 +171,15 @@ export class SocietyTab {
         .filter(Boolean);
       const hushed = d.hushed.map((id) => this.sim.get(id)?.profile.name).filter(Boolean);
       const li = el('li', 'secret', `${d.day}日目 ${d.time} ${d.placeName}：${d.actorName}が${DEED_TEXT[d.kind](d)}`);
+      // 噂がゆがんで伝わっている人
+      const twisted = Object.entries(d.rumors ?? {})
+        .map(([id, v]) => {
+          const who = this.sim.get(id)?.profile.name;
+          if (!who) return '';
+          return v.actorId !== d.actorId ? `${who}は「${v.actorName}の仕業」と信じている` : `${who}は大げさな話を聞いている`;
+        })
+        .filter(Boolean);
+      if (twisted.length) li.append(el('span', 'deed-truth', `　噂：${twisted.join('／')}`));
       li.append(
         el(
           'span',
@@ -200,6 +211,22 @@ export class SocietyTab {
       for (const l of lines) list.append(el('li', '', l));
       s.append(list);
     }
+    return s;
+  }
+
+  private estates(): HTMLElement {
+    const left = Object.values(this.sim.estates).filter((e) => e.money > 0 || e.inventory.length > 0);
+    const s = this.section(`空き家に残る遺品（${left.length}）`);
+    if (left.length === 0) {
+      s.append(el('p', 'mind-empty', 'なし'));
+      return s;
+    }
+    const list = el('ul', 'ties');
+    for (const e of left) {
+      const what = lootText({ items: e.inventory.map((st) => ({ item: st.item, qty: st.qty })), money: e.money });
+      list.append(el('li', '', `${e.ownerName}の家：${what}${e.day ? `（${e.day}日目から）` : ''}`));
+    }
+    s.append(list);
     return s;
   }
 

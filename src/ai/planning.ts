@@ -92,9 +92,12 @@ function actionCatalog(sim: Simulation, r: Resident): string {
     attack: '相手を殴って体力を大きく減らす（20〜45）。target に相手の名前。体力が0になった人は死ぬ。相手には必ず知られる',
     kill: '相手を殺し、相手の持ち物とお金をすべて自分のものにする。target に相手の名前。自分の体力が相手より多いほど、相手が弱っているほど成功しやすい。失敗すると相手は傷を負って逃げる。その場に誰もいなければ、誰がやったかは分からない',
     accuse: '広場で、ある人のことを村のみんなに言いふらす（本当のことでも嘘でもよい）。target に相手の名前、purpose に言いふらす中身',
+    scavenge: `亡くなった人・出ていった人の空き家から、残された物とお金を持ち出す。target にその人の名前。誰の物でもないが、見られれば盗みと思われるかもしれない。${estateLine(sim)}`,
+    pray: '家で天に祈る。purpose に祈りの言葉を書く。天の声の主に届くかもしれない（天の声を聞いたことがある人・説かれたことがある人だけ）',
+    preach: '広場で、天の声のことを村のみんなに説く。purpose に説く中身を書く。信じる人も、笑う人もいる（天の声を聞いたことがある人だけ）',
     call_assembly: `村のみんなに呼びかけ、その日の夕方に集会所で集会を開く。purpose に議題（例：誰かを村から追放する、誰かに罰金を科す、村の決まりを作る・やめる、村のことを話し合う）、相手がいれば target。結論は出席者の多数決で決まり、決まったことは実行される${sim.assemblies.some((a) => a.status !== 'done') ? '（今は別の集会が予定されている）' : ''}`,
   };
-  return PLAN_ACTIONS.map((a) => {
+  return PLAN_ACTIONS.filter((a) => (a !== 'pray' && a !== 'preach') || knowsHeaven(r) && (a === 'pray' || (r.faith?.heard ?? 0) > 0)).map((a) => {
     const place = ACTIONS[a].place === 'home' ? '自分の家' : ACTIONS[a].place;
     return `- ${a}（${ACTIONS[a].label}、場所:${placeLabel(place)}）: ${lines[a]}${can[a] ?? ''}`;
   }).join('\n');
@@ -219,6 +222,19 @@ function ties(sim: Simulation, r: Resident): string[] {
     }
   }
   return lines;
+}
+
+/** 遺品が残っていそうな空き家（亡くなったこと・出ていったことは村じゅうが知っている） */
+function estateLine(sim: Simulation): string {
+  const left = Object.values(sim.estates).filter((e) => e.money > 0 || e.inventory.length > 0);
+  return left.length
+    ? `遺品が残っていそうな空き家: ${left.map((e) => `${e.ownerName}の家`).join('、')}`
+    : '今は遺品の残っていそうな空き家はない';
+}
+
+/** 天の声に触れたことがあるか（祈る・説くは、それを知っている人だけ） */
+export function knowsHeaven(r: Resident): boolean {
+  return (r.faith?.heard ?? 0) > 0 || (r.faith?.sermons ?? 0) > 0;
 }
 
 /** 盗み・強奪で狙えそうな相手（最後に会ったとき、たくさん持っていた人）。見たことしか分からない */
@@ -564,13 +580,24 @@ export function parsePlan(raw: RawPlan, day: number, current: Resident, sim: Sim
     .map((b) => {
       // 相手の要る行動で、相手が村にいなければ、ぶらつくことにする
       const targeted = TARGETED_ACTIONS.includes(b.action as ActionId) || b.action === 'accuse' || b.action === 'call_assembly';
-      const target = targeted ? byName.get(String(b.target ?? '').trim()) : undefined;
       const purpose = clean(b.purpose, 60);
-      const missing =
-        b.action === 'accuse' || b.action === 'call_assembly'
+      // 遺品の持ち出しは、亡くなった（出ていった）人の名前から、その空き家を探す
+      const estateHome =
+        b.action === 'scavenge'
+          ? Object.entries(sim.estates).find(([, e]) => e.ownerName === String(b.target ?? '').trim())?.[0]
+          : undefined;
+      const target = b.action === 'scavenge' ? estateHome : targeted ? byName.get(String(b.target ?? '').trim()) : undefined;
+      const wordy = b.action === 'accuse' || b.action === 'call_assembly' || b.action === 'pray' || b.action === 'preach';
+      const allowed =
+        (b.action !== 'pray' || knowsHeaven(current)) && (b.action !== 'preach' || (current.faith?.heard ?? 0) > 0);
+      const missing = !allowed
+        ? true
+        : wordy
           ? !purpose || hasForeignWords(purpose)
-          : targeted && (!target || target === current.profile.id);
-      const action = (missing ? 'wander' : b.action) as ActionId;
+          : b.action === 'scavenge'
+            ? !target
+            : targeted && (!target || target === current.profile.id);
+      const action = (missing ? (b.action === 'pray' ? 'rest' : 'wander') : b.action) as ActionId;
       const prices: Partial<Record<ItemId, number>> = {};
       for (const id of ITEM_IDS) {
         const p = Math.round(Number(b.prices?.[id]));
@@ -581,7 +608,7 @@ export function parsePlan(raw: RawPlan, day: number, current: Resident, sim: Sim
         to: clamp(Number(b.to), WAKE_AT, SLEEP_FROM),
         action,
         ...(Object.keys(prices).length > 0 ? { prices } : {}),
-        ...(TARGETED_ACTIONS.includes(action) || action === 'accuse' || action === 'call_assembly'
+        ...(TARGETED_ACTIONS.includes(action) || ['accuse', 'call_assembly', 'scavenge', 'pray', 'preach'].includes(action)
           ? { target: target === current.profile.id ? undefined : target, purpose: hasForeignWords(purpose) ? '' : purpose }
           : {}),
       };
@@ -693,6 +720,7 @@ const SELF_SYSTEM = `あなたは小さな村に暮らす村人本人です。�
   - 生き延びること以外でもよい。豊かになりたい、認められたい、誰かに勝ちたい、見返したい、あの人のようになりたい、楽をしたい、など。
   - きれいごとでなくてよい。欲・見栄・嫉妬・仕返しの気持ちがあれば、そのまま書く。
   - 経験や人間関係から自然に出てくるものにする。前の望みが続いていればそのままでも、変わってもよい。
+- 天の声を聞いたことや、誰かが天の声のことを説くのを聞いたことがあれば、それをどう受け止めているか（信じる・疑う・恐れる・利用する）を自己像に入れてもよい。
 - 出力はJSONのみ。`;
 
 export function buildSelfImageMessages(sim: Simulation, r: Resident): ChatMessage[] {

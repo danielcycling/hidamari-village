@@ -2,7 +2,7 @@ import { HOME_LEVEL_NAMES, type Assembly, type AssemblyResult, type ProposalKind
 import type { ChatMessage, OllamaClient } from './llm';
 import { affinityLabel, hungerLabel, knowledgeOf, secretsOf } from './prompt';
 
-const PROPOSAL_KINDS: ProposalKind[] = ['exile', 'fine', 'rule', 'repeal', 'none'];
+const PROPOSAL_KINDS: ProposalKind[] = ['exile', 'fine', 'rule', 'repeal', 'estate', 'none'];
 
 const SYSTEM = `あなたは小さな村の集会の記録係です。村人全員が集会所に集まり、ある議題について話し合って多数決をとります。その様子を書きます。
 
@@ -17,6 +17,7 @@ const SYSTEM = `あなたは小さな村の集会の記録係です。村人全�
   - fine: target に罰金（amount G）を科す。beneficiary は受け取る人（いなければ空。村のみんなで分ける）
   - rule: 村の決まりを作る（title に短い名前、text に中身）
   - repeal: 今ある決まりを廃止する（law_id に番号）
+  - estate: 亡くなった人・出ていった人の遺品の行き先を決める（estate_of にその人の名前、beneficiary に受け継ぐ人。空なら村のみんなで分ける）
   - none: 提案はまとまらず、話し合いだけで終わる
 - 今ある決まりと同じものを、もう一度作る提案はしない（変えたいなら repeal してから作り直すか、別の中身にする）。議題に関係して、出席者が知っている問題（盗み・約束破りなど）があれば、それを取り上げてもよい。
 - votes には出席者全員の賛否（yes が true なら賛成）と、その理由（20文字以内）を書く。none のときも、話し合いの流れに賛成かどうかで書く。
@@ -59,6 +60,7 @@ function buildMessages(sim: Simulation, a: Assembly, attendees: Resident[]): Cha
     '',
     '今ある村の決まり:',
     ...(laws.length ? laws : ['- まだない']),
+    ...estateLines(sim),
     '',
     `村の最近の出来事: ${sim.recentNews().slice(-4).map((n) => n.text).join('／') || '特になし'}`,
     '',
@@ -71,7 +73,13 @@ function buildMessages(sim: Simulation, a: Assembly, attendees: Resident[]): Cha
   ];
 }
 
-function schema(names: string[], lawIds: number[]): object {
+/** 遺品が残っている空き家（亡くなったこと・出ていったことは、みんな知っている） */
+function estateLines(sim: Simulation): string[] {
+  const left = Object.values(sim.estates).filter((e) => e.money > 0 || e.inventory.length > 0);
+  return left.length ? ['遺品が残っている空き家:', ...left.map((e) => `- ${e.ownerName}の家`)] : [];
+}
+
+function schema(names: string[], lawIds: number[], estateOwners: string[]): object {
   return {
     type: 'object',
     properties: {
@@ -95,6 +103,7 @@ function schema(names: string[], lawIds: number[]): object {
           title: { type: 'string' },
           text: { type: 'string' },
           law_id: { type: 'integer', ...(lawIds.length ? { enum: lawIds } : {}) },
+          estate_of: { type: 'string', enum: [...estateOwners, ''] },
         },
         required: ['kind'],
       },
@@ -124,6 +133,7 @@ interface RawAssembly {
     title?: string;
     text?: string;
     law_id?: number;
+    estate_of?: string;
   };
   votes?: { voter: string; yes: boolean; reason: string }[];
   summary?: string;
@@ -154,6 +164,8 @@ function parse(sim: Simulation, raw: RawAssembly, attendees: Resident[]): Assemb
   const targetId = p.target ? byName.get(p.target) : undefined;
   if ((kind === 'exile' || kind === 'fine') && !targetId) kind = 'none';
   if (kind === 'repeal' && !sim.laws.some((l) => l.id === p.law_id)) kind = 'none';
+  const estateHomeId = Object.entries(sim.estates).find(([, e]) => e.ownerName === p.estate_of)?.[0];
+  if (kind === 'estate' && !estateHomeId) kind = 'none';
   const title = clean(p.title, 20);
   const text = clean(p.text, 80);
   if (kind === 'rule' && (!title || hasForeignWords(title + text))) kind = 'none';
@@ -166,7 +178,8 @@ function parse(sim: Simulation, raw: RawAssembly, attendees: Resident[]): Assemb
       kind,
       targetId,
       amount: kind === 'fine' ? Math.max(1, Math.round(Number(p.amount) || 0)) : undefined,
-      beneficiaryId: kind === 'fine' && p.beneficiary ? byName.get(p.beneficiary) : undefined,
+      beneficiaryId: (kind === 'fine' || kind === 'estate') && p.beneficiary ? byName.get(p.beneficiary) : undefined,
+      estateHomeId: kind === 'estate' ? estateHomeId : undefined,
       title: kind === 'rule' ? title : undefined,
       text: kind === 'rule' ? text : undefined,
       lawId: kind === 'repeal' ? p.law_id : undefined,
@@ -202,6 +215,9 @@ export class AssemblyDirector {
         schema(
           names,
           this.sim.laws.map((l) => l.id),
+          Object.values(this.sim.estates)
+            .filter((e) => e.money > 0 || e.inventory.length > 0)
+            .map((e) => e.ownerName),
         ),
         undefined,
         // 全員の投票まで書くので長めに

@@ -1045,3 +1045,19 @@ body {
   font-size: 13px;
   margin: 4px 0 8px;
 }
+
+/* ───────────── 祈り ───────────── */
+.log-prayer span {
+  color: #f3d27a;
+}
+
+.god-answer {
+  font: inherit;
+  font-size: 11px;
+  margin-left: 4px;
+  padding: 0 6px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  cursor: pointer;
+}

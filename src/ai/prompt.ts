@@ -1,6 +1,6 @@
 import { describeInventory, foodValue, ITEM_IDS, ITEMS, SKILL_IDS, SKILLS } from '../world/economy';
 import { ACTIONS, DAILY_NEED, WORK_ACTIONS } from '../world/planner';
-import { HOME_LEVEL_NAMES, lootText, satisfactionLabel, type Deed, type Resident, type Simulation } from '../world/sim';
+import { deedStory, HOME_LEVEL_NAMES, lootText, satisfactionLabel, type Deed, type Resident, type Simulation } from '../world/sim';
 import type { ChatMessage } from './llm';
 import { topicNotice } from './topics';
 
@@ -53,6 +53,7 @@ const DEED_TEXT: Record<Deed['kind'], (d: Deed) => string> = {
   rob: (d) => (d.success && loot(d) ? `${d.victimName}から${loot(d)}を力ずくで奪った` : `${d.victimName}から力ずくで奪おうとした`),
   attack: (d) => `${d.victimName}を殴った`,
   kill: (d) => (d.success ? `${d.victimName}を殺し${loot(d) ? `、${loot(d)}を奪った` : 'た'}` : `${d.victimName}を殺そうとした`),
+  loot: (d) => `${d.victimName}の空き家から遺品${loot(d) ? `（${loot(d)}）` : ''}を持ち出した`,
 };
 
 const loot = (d: Deed) => lootText(d);
@@ -75,7 +76,9 @@ export function secretsOf(sim: Simulation, r: Resident): string[] {
 export function knowledgeOf(sim: Simulation, r: Resident): string[] {
   return sim.deedsKnownBy(r).slice(-5).map((d) => {
     const how = d.knownBy[r.profile.id];
-    const act = `${d.actorName}が${DEED_TEXT[d.kind](d)}`;
+    // 人から聞いた話は、本人が聞いたとおり（犯人や量が本当と違うこともある）
+    const v = sim.versionOf(d, r.profile.id);
+    const act = how === 'heard' ? `${v.actorName}が${deedStory(d, v)}` : `${d.actorName}が${DEED_TEXT[d.kind](d)}`;
     const text =
       how === 'victim'
         ? `${d.actorName}にやられた：${act}`

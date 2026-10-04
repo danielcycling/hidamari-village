@@ -38,6 +38,11 @@ const TEMPLATE = `
   </section>
 
   <section class="god-section">
+    <h3>届いた祈り</h3>
+    <ul class="god-laws" data-prayers></ul>
+  </section>
+
+  <section class="god-section">
     <h3>村の決まりと集会</h3>
     <ul class="god-laws" data-laws></ul>
   </section>
@@ -77,9 +82,41 @@ export class GodPanel {
     sim.events.on('residentAdded', refresh);
     sim.events.on('residentDied', refresh);
     this.refreshLaws();
+    this.refreshPrayers();
     sim.events.on('log', (e) => {
       if (e.kind === 'assembly' || (e.kind === 'life' && e.text.includes('集会'))) this.refreshLaws();
+      if (e.kind === 'prayer') this.refreshPrayers();
     });
+  }
+
+  /** 村人から届いた祈り（新しい順）。「応える」で、その人への天の声の欄を開く */
+  private refreshPrayers() {
+    const list = this.root.querySelector('[data-prayers]')!;
+    const prayers = [...this.sim.prayers].reverse().slice(0, 8);
+    if (prayers.length === 0) {
+      const li = document.createElement('li');
+      li.textContent = 'まだ祈りは届いていません。天の声を聞いた村人は、祈るようになるかもしれません。';
+      list.replaceChildren(li);
+      return;
+    }
+    list.replaceChildren(
+      ...prayers.map((p) => {
+        const li = document.createElement('li');
+        li.textContent = `🙏 ${p.day}日目 ${p.time} ${p.name}「${p.text}」 `;
+        const answer = document.createElement('button');
+        answer.type = 'button';
+        answer.className = 'god-answer';
+        answer.textContent = '応える';
+        answer.addEventListener('click', () => {
+          const form = this.form('whisper');
+          (form.elements.namedItem('target') as HTMLSelectElement).value = p.residentId;
+          (form.elements.namedItem('mode') as HTMLSelectElement).value = 'whisper';
+          (form.elements.namedItem('text') as HTMLInputElement).focus();
+        });
+        li.append(answer);
+        return li;
+      }),
+    );
   }
 
   /** 今ある村の決まりと、予定されている集会 */
