@@ -98,6 +98,11 @@ export class OllamaClient {
     return this.inFlight >= this.maxParallel;
   }
 
+  /** 同時に投げられる数を超えて、待たせているリクエストの数 */
+  get queued(): number {
+    return Math.max(0, this.inFlight - this.maxParallel);
+  }
+
   /** 何かしら考えている最中か（表示用） */
   get working(): boolean {
     return this.inFlight > 0;

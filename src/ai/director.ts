@@ -23,6 +23,8 @@ import {
 } from './prompt';
 import { ITEM_IDS, ITEMS } from '../world/economy';
 
+/** 用件のある会話を、AIの順番待ちに何件まで積むか */
+const MAX_WAITING = 3;
 /** 未接続のときに再接続を試みる間隔（ミリ秒） */
 const RECONNECT_INTERVAL = 15_000;
 
@@ -37,7 +39,10 @@ export class ConversationDirector {
     private readonly sim: Simulation,
     private readonly llm: OllamaClient,
   ) {
-    sim.conversationGate = () => (this.llm.status === 'ready' && !this.llm.busy ? 'ai' : 'greeting');
+    // たまたま出会っただけなら、AIが混んでいるときはあいさつで済ませる。
+    // 用があって会いに来たとき（食べ物を頼む・取り立てる など）は、順番を待ってでもちゃんと話す
+    sim.conversationGate = (_a, _b, purpose) =>
+      this.llm.status === 'ready' && (!this.llm.busy || (purpose && this.llm.queued < MAX_WAITING)) ? 'ai' : 'greeting';
     sim.events.on('encounter', (conv) => void this.compose(conv));
   }
 

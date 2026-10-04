@@ -90,6 +90,8 @@ const GREETING_TALK_MINUTES = 3;
 const GREETING_LINE_MINUTES = 1.5;
 /** AIの返事をこれ以上待たない（現実の秒） */
 const PENDING_TIMEOUT = 90;
+/** 用件のある会話は、AIの順番待ちが長くても待つ（現実の秒） */
+const PENDING_TIMEOUT_WITH_PURPOSE = 240;
 const MAX_MEMORIES = 40;
 /** 市場で、これだけの満腹度ぶんは手元に残す（売らない） */
 const KEEP_FOOD = DAILY_NEED;
@@ -591,7 +593,7 @@ export class Simulation {
   readonly residents: Resident[] = [];
   readonly conversations: Conversation[] = [];
   /** 出会ったときにAIで会話させるか、あいさつで済ませるかを決める */
-  conversationGate: (a: Resident, b: Resident) => Conversation['kind'] = () => 'greeting';
+  conversationGate: (a: Resident, b: Resident, purpose?: string) => Conversation['kind'] = () => 'greeting';
   readonly news: News[] = [];
   /** 今の空。until > 0 なら神さまが降らせた一時的な雨で、過ぎると dayWeather に戻る */
   weather: { kind: WeatherKind; until: number } = { kind: 'clear', until: 0 };
@@ -2371,7 +2373,7 @@ export class Simulation {
   }
 
   private startConversation(a: Resident, b: Resident, placeName: string, indoors: boolean, purpose?: string) {
-    const kind = this.conversationGate(a, b);
+    const kind = this.conversationGate(a, b, purpose);
     const conv: Conversation = {
       id: ++this.conversationSeq,
       a,
@@ -2416,7 +2418,7 @@ export class Simulation {
     for (const conv of [...this.conversations]) {
       if (!conv.lines) {
         conv.waited += realSeconds;
-        if (conv.waited > PENDING_TIMEOUT) this.fallbackToGreeting(conv);
+        if (conv.waited > (conv.purpose ? PENDING_TIMEOUT_WITH_PURPOSE : PENDING_TIMEOUT)) this.fallbackToGreeting(conv);
         continue;
       }
       const line = conv.lines[conv.index];

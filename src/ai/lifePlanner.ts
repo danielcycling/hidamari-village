@@ -64,7 +64,7 @@ export class LifePlanner {
     sim.dawnHold = () => this.shouldHoldDawn();
     // 夜の計画づくりを優先する（そのあいだの出会いはあいさつで済ませる）
     const gate = sim.conversationGate;
-    sim.conversationGate = (a, b) => (this.planning ? 'greeting' : gate(a, b));
+    sim.conversationGate = (a, b, purpose) => (this.planning && !purpose ? 'greeting' : gate(a, b, purpose));
     // 飢えかけた人の判断は、ほかの仕事より先に考える
     sim.crisisHandler = (r) => {
       if (this.llm.status !== 'ready') return false;
