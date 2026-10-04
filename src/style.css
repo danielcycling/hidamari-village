@@ -958,3 +958,84 @@ body {
 .log-assembly span {
   color: #8ad0ff;
 }
+
+/* ───────────── 社会タブ ───────────── */
+.society-stats,
+.society-wealth {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.society-stats li {
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.society-wealth li {
+  display: grid;
+  grid-template-columns: 4.5em 1fr 9em;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin: 3px 0;
+}
+
+.wealth-value {
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.meter-bar.money i {
+  background: var(--accent);
+}
+
+.assembly {
+  border: 1px solid var(--line);
+  margin: 6px 0;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.assembly summary {
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.assembly-status {
+  font-size: 11px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.assembly-status.passed {
+  color: #8ad0ff;
+  border-color: #8ad0ff;
+}
+
+.assembly-status.rejected {
+  color: #e8a0a0;
+  border-color: #e8a0a0;
+}
+
+.assembly-line {
+  margin: 4px 0;
+}
+
+.assembly-line.muted,
+.assembly-votes {
+  color: var(--muted);
+}
+
+.assembly-speeches,
+.assembly-votes {
+  margin: 4px 0;
+  padding-left: 1.4em;
+  font-size: 12px;
+  line-height: 1.7;
+}

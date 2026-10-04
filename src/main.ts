@@ -53,6 +53,9 @@ async function main() {
   const modelPicker = new ModelPicker(sim, llm);
   void director.start(params.get('model') ?? savedModel());
 
+  // 開発中だけ、ブラウザのコンソールから村を触れるようにする（window.sim）
+  if (import.meta.env.DEV) Object.assign(window, { sim });
+
   canvas.addEventListener('click', (e) => panel.select(renderer.hitTest(e.clientX, e.clientY)));
 
   sim.log(save ? `${sim.clock.format()}から観察を再開した` : 'ひだまり村の観察を始めた', 'system');

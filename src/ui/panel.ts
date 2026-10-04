@@ -4,6 +4,7 @@ import type { OllamaClient } from '../ai/llm';
 import type { Renderer } from '../render/renderer';
 import { avatar } from './avatar';
 import { Inspector } from './inspector';
+import { SocietyTab } from './societyTab';
 import { RelationGraph } from './relationGraph';
 import type { LogEntry, Resident, Simulation } from '../world/sim';
 import { CONDITIONS, WEATHER, type WeatherKind } from '../world/weather';
@@ -28,6 +29,8 @@ export class Panel {
   private readonly speedEl = document.getElementById('speed')!;
   private readonly conversationEls = new Map<number, HTMLElement>();
   private readonly inspector: Inspector;
+  private readonly society: SocietyTab;
+  private societyRenderedAt = 0;
   private readonly graph: RelationGraph;
   private activeTab = 'panel-log';
   /** 気持ちや記憶が変わったので、心・相関図を描き直す必要がある */
@@ -43,6 +46,7 @@ export class Panel {
   ) {
     this.buildSpeedControls();
     this.inspector = new Inspector(sim);
+    this.society = new SocietyTab(sim);
     this.graph = new RelationGraph(sim, (id) => this.select(id));
     this.buildTabs();
     for (const r of sim.residents) this.addResidentItem(r);
@@ -74,6 +78,7 @@ export class Panel {
     }
     if (panelId === 'panel-graph') this.graph.render();
     if (panelId === 'panel-mind') this.inspector.render(this.renderer.selectedId);
+    if (panelId === 'panel-society') this.society.render();
   }
 
   refresh(): void {
@@ -103,6 +108,11 @@ export class Panel {
     if (this.activeTab === 'panel-mind' && performance.now() - this.mindRenderedAt > 1000) {
       this.mindRenderedAt = performance.now();
       this.inspector.refresh();
+    }
+    // 社会タブも、開いている間は2秒ごとに描き直す
+    if (this.activeTab === 'panel-society' && performance.now() - this.societyRenderedAt > 2000) {
+      this.societyRenderedAt = performance.now();
+      this.society.render();
     }
     if (this.mindDirty) {
       this.mindDirty = false;
