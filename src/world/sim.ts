@@ -131,6 +131,8 @@ const ASSEMBLY_GIVE_UP = 240;
 const TEACH_GAIN = 0.4;
 /** 教わる代金の最低額（上達1あたり） */
 const TEACH_FEE_PER_POINT = 10;
+/** 好感度が毎晩0へ戻っていく割合 */
+const AFFINITY_FADE = 0.03;
 /** 家を1段改築したときに、村の人から集まる好感度（段の高さを掛ける） */
 const HOME_RESPECT = 4;
 /** お酒1杯で上がる満足 */
@@ -1096,6 +1098,10 @@ export class Simulation {
   /** 1日の終わり：出来高を要約して記憶とログに残し、使わなかった技能を衰えさせる */
   private endOfDay() {
     const day = this.clock.day - 1;
+    // 気持ちは、何もなければ少しずつ薄れていく
+    for (const r of this.residents) {
+      for (const rel of Object.values(r.relations)) rel.affinity = Math.round(rel.affinity * (1 - AFFINITY_FADE) * 10) / 10;
+    }
     for (const r of this.residents) this.updateSatisfaction(r, day);
     // 飢えた人は、そのとき食べ物を余らせていた人を覚えている（恨むかどうかは本人しだい）
     for (const r of this.residents) {
@@ -1277,7 +1283,7 @@ export class Simulation {
   /** 相手への気持ちを、理由つきで動かす */
   feel(self: Resident, other: Resident, delta: number, reason: string): void {
     const rel = (self.relations[other.profile.id] ??= defaultRelation());
-    rel.affinity = Math.max(-100, Math.min(100, rel.affinity + delta));
+    rel.affinity = shiftAffinity(rel.affinity, delta);
     rel.notes = [{ day: this.clock.day, text: reason, delta }, ...(rel.notes ?? [])].slice(0, 6);
   }
 
@@ -2754,7 +2760,7 @@ export class Simulation {
       if (ref.memory) this.remember(self, ref.memory);
       if (ref.reason && ref.affinityDelta !== 0) this.feel(self, other, ref.affinityDelta, `${this.clock.day}日目、${ref.reason}`);
       const rel = self.relations[other.profile.id] ?? defaultRelation();
-      if (!ref.reason) rel.affinity = Math.max(-100, Math.min(100, rel.affinity + ref.affinityDelta));
+      if (!ref.reason) rel.affinity = shiftAffinity(rel.affinity, ref.affinityDelta);
       if (ref.impression) rel.impression = ref.impression;
       self.relations[other.profile.id] = rel;
       const sign = ref.affinityDelta > 0 ? '+' : '';
@@ -3130,4 +3136,14 @@ export function deedStory(d: Deed, version: { exaggerated?: boolean } = {}): str
     case 'loot':
       return `${d.victimName}の空き家から遺品${loot ? `（${loot}）` : ''}を持ち出した`;
   }
+}
+
+/**
+ * 好感度を動かす。端に近いほど同じ向きには動きにくい（+80 の相手に +15 しても +5 ほど）。
+ * 逆向き（好きな人に裏切られる など）は、そのまま大きく動く
+ */
+export function shiftAffinity(current: number, delta: number): number {
+  const sameWay = Math.sign(delta) === Math.sign(current);
+  const room = sameWay ? 1 - Math.min(1, Math.abs(current) / 100) * 0.7 : 1;
+  return Math.max(-100, Math.min(100, Math.round((current + delta * room) * 10) / 10));
 }
