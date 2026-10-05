@@ -54,3 +54,5 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+          # アプリ名が日本語だと GitHub 上のファイル名から消えてしまうので、英字の名前をつける
+          assetNamePattern: 'hidamari-village_[version]_[arch][ext]'
