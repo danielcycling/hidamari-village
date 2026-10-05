@@ -16,6 +16,13 @@ struct OllamaStatus {
     running: bool,
 }
 
+/// 画面から頼まれた Ollama への問い合わせの結果
+#[derive(Serialize)]
+struct HttpReply {
+    status: u16,
+    body: String,
+}
+
 #[derive(Serialize, Clone)]
 struct Progress {
     /// 今していること（表示用）
@@ -71,6 +78,33 @@ async fn ollama_status() -> OllamaStatus {
         installed: running || installed_app().is_some(),
         running,
     }
+}
+
+/// 画面の代わりに Ollama へ問い合わせる（会話・計画など、AIへのすべての問い合わせはここを通る）。
+/// 画面側の通信部品は Windows で応答の受け取りに失敗することがあるため、通信はアプリ本体で行う
+#[tauri::command]
+async fn ollama_fetch(method: String, path: String, body: Option<String>) -> Result<HttpReply, String> {
+    if !path.starts_with("/api/") {
+        return Err("使えない宛先です".into());
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(300))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let url = format!("{OLLAMA_URL}{path}");
+    let req = if method.eq_ignore_ascii_case("POST") {
+        client
+            .post(url)
+            .header("Content-Type", "application/json")
+            .body(body.unwrap_or_default())
+    } else {
+        client.get(url)
+    };
+    let res = req.send().await.map_err(|e| e.to_string())?;
+    let status = res.status().as_u16();
+    let body = res.text().await.map_err(|e| e.to_string())?;
+    Ok(HttpReply { status, body })
 }
 
 /// 入っている Ollama を起動し、応答するまで少し待つ
@@ -210,8 +244,7 @@ async fn pull_model(app: AppHandle, model: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_http::init())
-        .invoke_handler(tauri::generate_handler![ollama_status, start_ollama, install_ollama, pull_model])
+        .invoke_handler(tauri::generate_handler![ollama_status, start_ollama, install_ollama, pull_model, ollama_fetch])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

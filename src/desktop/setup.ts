@@ -1,6 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
 /** デスクトップ版で Ollama につなぐ先 */
 const OLLAMA_URL = 'http://127.0.0.1:11434';
@@ -32,6 +31,21 @@ interface Progress {
   total: number;
 }
 
+/**
+ * fetch の代わり：Ollama への問い合わせをアプリ本体（Rust）に頼む。
+ * 画面側の通信部品は Windows で応答の受け取りに失敗することがあるため
+ */
+const desktopFetch: typeof fetch = async (input, init) => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  const path = new URL(url).pathname;
+  const reply = await invoke<{ status: number; body: string }>('ollama_fetch', {
+    method: init?.method ?? 'GET',
+    path,
+    body: typeof init?.body === 'string' ? init.body : null,
+  });
+  return new Response(reply.body, { status: reply.status, headers: { 'Content-Type': 'application/json' } });
+};
+
 export interface DesktopConnection {
   baseUrl: string;
   fetchImpl: typeof fetch;
@@ -44,7 +58,7 @@ export { isTauri };
  * 準備できたら接続先を、AIなしで始めるなら null を返す
  */
 export async function prepareDesktop(): Promise<DesktopConnection | null> {
-  const fetchImpl = tauriFetch as unknown as typeof fetch;
+  const fetchImpl = desktopFetch;
   const ui = new SetupView();
   const unlisten = await listen<Progress>('setup-progress', (e) => ui.progress(e.payload));
   try {

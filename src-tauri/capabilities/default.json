@@ -6,17 +6,6 @@
     "main"
   ],
   "permissions": [
-    "core:default",
-    {
-      "identifier": "http:default",
-      "allow": [
-        {
-          "url": "http://127.0.0.1:11434/*"
-        },
-        {
-          "url": "http://localhost:11434/*"
-        }
-      ]
-    }
+    "core:default"
   ]
 }
