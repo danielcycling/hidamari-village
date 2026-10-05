@@ -95,7 +95,7 @@ function actionCatalog(sim: Simulation, r: Resident): string {
     scavenge: `亡くなった人・出ていった人の空き家から、残された物とお金を持ち出す。target にその人の名前。誰の物でもないが、見られれば盗みと思われるかもしれない。${estateLine(sim)}`,
     pray: '家で天に祈る。purpose に祈りの言葉を書く。天の声の主に届くかもしれない（天の声を聞いたことがある人・説かれたことがある人だけ）',
     preach: '広場で、天の声のことを村のみんなに説く。purpose に説く中身を書く。信じる人も、笑う人もいる（天の声を聞いたことがある人だけ）',
-    guard: `村の入り口で見張る。盗賊が来たとき、見張りが多く元気なほど追い払える（ひとりでは難しい）。追い払えば村の人から一目置かれるが、けがをすることもある。追い払えなければ、村じゅうの人の持ち物（食べ物・木材など）が半分奪われる。${raidLine(sim)}`,
+    guard: `村の入り口で見張る。盗賊が来たとき、見張りが多く元気なほど追い払える（ひとりでは難しい）。追い払えば村の人から一目置かれるが、けがをすることもある。追い払えなければ、村じゅうの人の持ち物（食べ物・木材など）が3割奪われる。${raidLine(sim)}`,
     call_assembly: `村のみんなに呼びかけ、その日の夕方に集会所で集会を開く。purpose に議題（例：誰かを村から追放する、誰かに罰金を科す、村の決まりを作る・やめる、村のことを話し合う）、相手がいれば target。結論は出席者の多数決で決まり、決まったことは実行される${sim.assemblies.some((a) => a.status !== 'done') ? '（今は別の集会が予定されている）' : ''}`,
   };
   return PLAN_ACTIONS.filter((a) => (a !== 'pray' && a !== 'preach') || knowsHeaven(r) && (a === 'pray' || (r.faith?.heard ?? 0) > 0)).map((a) => {
@@ -373,9 +373,10 @@ export function estimatePlanFood(r: Resident, plan: DailyPlan, weather = { farm:
 export function planReview(sim: Simulation, r: Resident, plan: DailyPlan): string | null {
   const est = estimatePlanFood(r, plan, { farm: sim.forecastFactor('farm'), fish: sim.forecastFactor('fish') });
   const stock = foodValue(r.inventory);
-  // 見直しはAIをもう1回呼ぶので、明日の分も足りなくなりそうなときだけ
-  if (est + stock >= DAILY_NEED * 1.2) return null;
+  // 見直しはAIをもう1回呼ぶので、明日の分も足りなくなりそうなときだけ（飢えている人は必ず）
+  if (r.satiety > 0 && est + stock >= DAILY_NEED * 1.2) return null;
   return [
+    ...(r.satiety <= 0 ? [`あなたは今、飢えている。${timeLeft(r)}。`] : []),
     `この計画で新しく手に入る食べ物の見込みは、満腹度${est}ぶん（明日の空模様の見立てで、畑・釣り・パン焼きから。買う・もらう分は含まない）。`,
     `手元には${stock}ぶんある。1日に要るのは${DAILY_NEED}。${hoursForADay(r)}。`,
     'この計画のままでいいか見直し、計画をもう一度JSONで出す。考えがあってこのままでよければ、同じ計画を出してよい。',

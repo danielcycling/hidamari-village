@@ -115,7 +115,7 @@ const RAID_FIRST_DAY = 3;
 const RAID_CHANCE = 0.05;
 const RAID_WINTER_BONUS = 0.06;
 const RAID_HOUR = 20;
-const RAID_TAKE = 0.5;
+const RAID_TAKE = 0.3;
 /** 盗賊を追い払った見張りに、村の人が寄せる好感度 */
 const GUARD_RESPECT = 8;
 /** 覚えておく祈りの数 */
@@ -2405,7 +2405,8 @@ export class Simulation {
     if (!task.purpose) return;
     r.visited = { targetId: 'accuse', until: this.taskEnd(r, task) };
     const target = task.target ? this.get(task.target) : undefined;
-    const text = `${r.profile.name}が広場で「${task.purpose}」と言いふらしている`;
+    const about = target && !task.purpose.includes(target.profile.name) ? `${target.profile.name}について、` : '';
+    const text = `${r.profile.name}が広場で${about}「${task.purpose}」と言いふらしている`;
     this.announce(text, 'life');
     for (const o of this.residents) if (o !== r) this.remember(o, text);
     if (target) {
@@ -3245,9 +3246,10 @@ export function satisfactionLabel(n: number): string {
   return '不満だらけ';
 }
 
-/** 満足による仕事のはかどり具合（満足0で0.8倍、50で1倍、100で1.2倍） */
+/** 満足による仕事のはかどり具合（満足0で0.9倍、50で1倍、100で1.2倍） */
 export function moodFactor(satisfaction: number): number {
-  return 0.8 + 0.4 * (Math.max(0, Math.min(100, satisfaction)) / 100);
+  const s = Math.max(0, Math.min(100, satisfaction)) / 100;
+  return s < 0.5 ? 0.9 + 0.2 * s : 1 + 0.4 * (s - 0.5);
 }
 
 /** 出来事を、聞いた話として言葉にする（「ミズキからパン2個を盗んだ」。大げさな話なら量が増える） */
