@@ -170,6 +170,8 @@ function parse(sim: Simulation, raw: RawAssembly, attendees: Resident[]): Assemb
   const title = clean(p.title, 20);
   const text = clean(p.text, 80);
   if (kind === 'rule' && (!title || hasForeignWords(title + text))) kind = 'none';
+  // 今ある決まりと同じ名前の提案は、確かめ合っただけ（提案なし）とみなす
+  if (kind === 'rule' && sim.laws.some((l) => l.title === title)) kind = 'none';
   const yes = votes.filter((v) => v.yes).length;
   // 出席者の過半数の賛成で可決
   const passed = kind !== 'none' && yes * 2 > attendees.length;
