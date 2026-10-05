@@ -52,7 +52,9 @@ jobs:
             - Mac（Intel）… `x64.dmg`
             - Windows … `x64-setup.exe`
           releaseDraft: true
+          # 自動アップデートは使っていないので、そのためのファイルは載せない
+          uploadUpdaterJson: false
           prerelease: false
           args: ${{ matrix.args }}
           # アプリ名が日本語だと GitHub 上のファイル名から消えてしまうので、英字の名前をつける
-          assetNamePattern: 'hidamari-village_[version]_[arch][ext]'
+          assetNamePattern: 'hidamari-village_[version]_[arch][setup][ext]'
