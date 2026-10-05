@@ -346,7 +346,34 @@ export interface Employment {
   workedToday: number;
 }
 
-export type AgreementType = 'trade' | 'gift' | 'loan' | 'repay' | 'hire' | 'quit' | 'teach' | 'promise' | 'hush';
+export type AgreementType =
+  | 'trade'
+  | 'gift'
+  | 'loan'
+  | 'repay'
+  | 'hire'
+  | 'quit'
+  | 'teach'
+  | 'promise'
+  | 'hush'
+  | 'found_org'
+  | 'join_org'
+  | 'leave_org'
+  | 'org_pay';
+
+/** 村人が作った組織（自警団・組合・互助会・秘密の集まり…何になるかは村人しだい） */
+export interface Organization {
+  id: number;
+  name: string;
+  purpose: string;
+  /** 代表（作った人）。代表がいなくなったら、いちばん古いメンバーが継ぐ */
+  leaderId: string;
+  memberIds: string[];
+  /** 1日の会費（毎晩、メンバーから金庫へ） */
+  dues: number;
+  treasury: number;
+  foundedDay: number;
+}
 
 /** 誰かが誰かにした非行・暴力の記録。誰が知っているかも持つ（秘密はここから生まれる） */
 export interface Deed {
@@ -407,6 +434,8 @@ export interface Agreement {
   days?: number;
   action?: WorkAction;
   text?: string;
+  /** 組織の名前（作る・入る・抜ける・金庫から払う） */
+  org?: string;
 }
 
 export interface Grave {
@@ -648,6 +677,9 @@ export class Simulation {
   readonly employments: Employment[] = [];
   readonly deliveries: Delivery[] = [];
   dealSeq = 0;
+  /** 村人が作った組織 */
+  readonly organizations: Organization[] = [];
+  orgSeq = 0;
   /** やってくる盗賊（その日の夜に来る。前の日に知らせがある） */
   raid: { day: number } | null = null;
   /** 村人の祈り（神さまである観察者に届く） */
@@ -714,7 +746,9 @@ export class Simulation {
   /** 村の中にあるお金の合計（総量が保存されているかの確認用） */
   totalMoney(): number {
     return (
-      this.residents.reduce((n, r) => n + r.money, 0) + Object.values(this.estates).reduce((n, e) => n + e.money, 0)
+      this.residents.reduce((n, r) => n + r.money, 0) +
+      Object.values(this.estates).reduce((n, e) => n + e.money, 0) +
+      this.organizations.reduce((n, o) => n + o.treasury, 0)
     );
   }
 
@@ -1014,6 +1048,7 @@ export class Simulation {
   }
 
   private die(r: Resident, cause: string, announcement = `${r.profile.name}が${cause}で亡くなった`) {
+    this.dropFromOrgs(r);
     if (r.conversation) this.finishConversation(r.conversation);
     this.residents.splice(this.residents.indexOf(r), 1);
     const home = this.map.places[r.profile.homeId];
@@ -1036,6 +1071,7 @@ export class Simulation {
 
   /** 村の入り口に着いた、出ていく住民を村から消す */
   private departVillage(r: Resident) {
+    this.dropFromOrgs(r);
     if (r.conversation) this.finishConversation(r.conversation);
     this.residents.splice(this.residents.indexOf(r), 1);
     const home = this.map.places[r.profile.homeId];
@@ -1098,6 +1134,7 @@ export class Simulation {
   /** 1日の終わり：出来高を要約して記憶とログに残し、使わなかった技能を衰えさせる */
   private endOfDay() {
     const day = this.clock.day - 1;
+    this.collectDues();
     // 気持ちは、何もなければ少しずつ薄れていく
     for (const r of this.residents) {
       for (const rel of Object.values(r.relations)) rel.affinity = Math.round(rel.affinity * (1 - AFFINITY_FADE) * 10) / 10;
@@ -2440,6 +2477,53 @@ export class Simulation {
     return this.deeds.filter((d) => d.actorId === r.profile.id);
   }
 
+  // ───────────── 組織 ─────────────
+
+  /** その人が入っている組織 */
+  orgsOf(r: Resident): Organization[] {
+    return this.organizations.filter((o) => o.memberIds.includes(r.profile.id));
+  }
+
+  /** 組織を抜ける（代表なら、いちばん古いメンバーが継ぐ。誰もいなくなれば解散） */
+  private leaveOrg(r: Resident, org: Organization, how = '', quiet = false) {
+    org.memberIds = org.memberIds.filter((id) => id !== r.profile.id);
+    if (org.memberIds.length === 0) {
+      this.organizations.splice(this.organizations.indexOf(org), 1);
+      // 金庫に残ったお金は、最後の人のものになる
+      r.money += org.treasury;
+      this.announce(`「${org.name}」は誰もいなくなり、なくなった`, 'life');
+      return;
+    }
+    if (org.leaderId === r.profile.id) {
+      org.leaderId = org.memberIds[0];
+      const next = this.get(org.leaderId);
+      if (next) this.remember(next, `「${org.name}」の代表を継いだ`);
+    }
+    if (!quiet) this.announce(`${r.profile.name}が${how}「${org.name}」を抜けた`, 'life');
+  }
+
+  /** 毎晩、メンバーから会費を集める */
+  private collectDues() {
+    for (const org of this.organizations) {
+      if (org.dues <= 0) continue;
+      for (const id of org.memberIds) {
+        const m = this.get(id);
+        if (!m) continue;
+        if (m.money < org.dues) {
+          this.remember(m, `「${org.name}」の会費${org.dues}Gを払えなかった`);
+          continue;
+        }
+        m.money -= org.dues;
+        org.treasury += org.dues;
+      }
+    }
+  }
+
+  /** 村からいなくなった人を、組織から外す */
+  private dropFromOrgs(r: Resident) {
+    for (const org of [...this.organizations]) if (org.memberIds.includes(r.profile.id)) this.leaveOrg(r, org, '', true);
+  }
+
   // ───────────── 村の集会 ─────────────
 
   /** 広場で集会を呼びかける。夕方（間に合わなければ翌日）に集会所で開く */
@@ -2967,6 +3051,55 @@ export class Simulation {
         this.remember(to, `${A}に${label}を教わって上達した（代金${fee}G）`);
         this.remember(from, `${B}に${label}を教えて、代金${fee}Gを受け取った`);
         this.feel(to, from, 4, `${this.clock.day}日目、${label}を教えてくれた`);
+        return;
+      }
+      case 'found_org': {
+        const name = (ag.org ?? '').trim();
+        if (!name) return;
+        if (this.organizations.some((o) => o.name === name)) {
+          return this.carryOut(conv, { ...ag, type: 'join_org', fromId: ag.toId, toId: ag.fromId });
+        }
+        const org: Organization = {
+          id: ++this.orgSeq,
+          name,
+          purpose: (ag.text ?? '').trim() || name,
+          leaderId: from.profile.id,
+          memberIds: [from.profile.id, to.profile.id],
+          dues: Math.max(0, Math.min(50, money)),
+          treasury: 0,
+          foundedDay: this.clock.day,
+        };
+        this.organizations.push(org);
+        this.announce(`${A}と${B}が「${org.name}」を作った（目的：${org.purpose}${org.dues ? `、会費は1日${org.dues}G` : ''}）`, 'life');
+        this.remember(from, `${B}と「${org.name}」を作り、代表になった（${org.purpose}）`);
+        this.remember(to, `${A}と「${org.name}」を作った（${org.purpose}）`);
+        return;
+      }
+      case 'join_org': {
+        // from が入る人、to が組織のメンバー
+        const org = this.organizations.find((o) => o.name === (ag.org ?? '').trim() && o.memberIds.includes(to.profile.id));
+        if (!org || org.memberIds.includes(from.profile.id)) return;
+        org.memberIds.push(from.profile.id);
+        this.announce(`${A}が「${org.name}」に入った`, 'life');
+        this.remember(from, `${B}の誘いで「${org.name}」に入った（${org.purpose}）`);
+        return;
+      }
+      case 'leave_org': {
+        const org = this.organizations.find((o) => o.name === (ag.org ?? '').trim() && o.memberIds.includes(from.profile.id));
+        if (!org) return;
+        this.leaveOrg(from, org, `${B}に告げて`);
+        return;
+      }
+      case 'org_pay': {
+        // 代表が、組織の金庫から誰かにお金を渡す
+        const org = this.organizations.find((o) => o.name === (ag.org ?? '').trim() && o.leaderId === from.profile.id);
+        if (!org || money <= 0) return;
+        if (org.treasury < money) return fail(`「${org.name}」の金庫から${money}G払う`, `金庫のお金が足りなかった`);
+        org.treasury -= money;
+        to.money += money;
+        to.today.earned += money;
+        this.log(`${A}が「${org.name}」の金庫から${B}に${money}Gを渡した${ag.text ? `（${ag.text}）` : ''}`, 'deal');
+        this.remember(to, `「${org.name}」の代表${A}から${money}Gを受け取った${ag.text ? `（${ag.text}）` : ''}`);
         return;
       }
       case 'promise': {

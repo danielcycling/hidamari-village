@@ -43,6 +43,7 @@ function personSection(sim: Simulation, r: Resident, a: Assembly): string {
     ...(r.wish ? [`望み: ${r.wish}`] : []),
     `状態: ${hungerLabel(r.satiety)}、体力${Math.round(r.health)}、所持金${r.money}G`,
     ...((r.homeLevel ?? 0) > 0 ? [`住まい: ${HOME_LEVEL_NAMES[r.homeLevel ?? 0]}（村の人から一目置かれている）`] : []),
+    ...sim.orgsOf(r).map((o) => `「${o.name}」の${o.leaderId === r.profile.id ? '代表' : 'メンバー'}（${o.purpose}）`),
     ...[rel(a.callerId), rel(a.targetId)].filter(Boolean),
     ...(known.length ? ['知っていること:', ...known.map((l) => `- ${l}`)] : []),
     ...(secrets.length ? ['隠していること（本人しか知らない）:', ...secrets.map((l) => `- ${l}`)] : []),

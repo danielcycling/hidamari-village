@@ -40,11 +40,27 @@ export interface RawAgreement {
   days?: number;
   work?: string;
   text?: string;
+  /** 組織の名前 */
+  org?: string;
   /** 根拠になったセリフ（そのまま抜き出す） */
   quote?: string;
 }
 
-export const AGREEMENT_TYPES = ['trade', 'gift', 'loan', 'repay', 'hire', 'quit', 'teach', 'promise', 'hush'] as const;
+export const AGREEMENT_TYPES = [
+  'trade',
+  'gift',
+  'loan',
+  'repay',
+  'hire',
+  'quit',
+  'teach',
+  'promise',
+  'hush',
+  'found_org',
+  'join_org',
+  'leave_org',
+  'org_pay',
+] as const;
 
 // ───────────── 隠していること・知っていること ─────────────
 
@@ -108,6 +124,7 @@ const SYSTEM_PROMPT = `あなたは小さな村「ひだまり村」の観察記
 - 無理に仲良くさせない。人物の状況や記憶に理由があれば、不満・嫉妬・恨み・怒り・軽蔑も自然に出してよい。反対に、理由がないのに対立させる必要もない。
 - 好感度は会話の内容に応じて -15〜+15 の範囲で変える。上がることも下がることも同じくらい普通にある。
 - 持っていない物やお金は渡せない。やりとりは、それぞれが持っている範囲でしか決まらない。
+- 2人以上で、組織（集まり・組合・自警団・互助会など、名前も目的も自由）を作ったり、誘って入れたり、抜けたりできる。組織には会費と金庫を持たせられる。
 - 腕前を教わるには、教わる側が教える側に代金を払う。腕前は財産なので、安くはない（上手な人ほど高く求めてよい）。
 - セリフ・summary・memory・impression は**すべて自然な日本語**で書く。英語や他の言語の単語を混ぜない。
 - 出力は指定のJSONのみ。`;
@@ -163,6 +180,15 @@ function between(sim: Simulation, self: Resident, other: Resident): string[] {
   return lines;
 }
 
+/** 入っている組織（誰がどこに入っているかは村じゅうが知っている） */
+function orgLines(sim: Simulation, self: Resident, other: Resident): string[] {
+  return sim.orgsOf(self).map((o) => {
+    const role = o.leaderId === self.profile.id ? '代表' : 'メンバー';
+    const together = o.memberIds.includes(other.profile.id) ? `（${other.profile.name}も仲間）` : '';
+    return `「${o.name}」の${role}${together}：目的「${o.purpose}」、会費1日${o.dues}G、金庫${o.treasury}G`;
+  });
+}
+
 const section = (title: string, lines: string[]) => (lines.length ? [`${title}:`, ...lines.map((l) => `- ${l}`)] : []);
 
 function describe(sim: Simulation, self: Resident, other: Resident): string {
@@ -181,6 +207,7 @@ function describe(sim: Simulation, self: Resident, other: Resident): string {
     `家: ${HOME_LEVEL_NAMES[self.homeLevel ?? 0]}、暮らしの満足: ${satisfactionLabel(self.satisfaction ?? 50)}${self.satisfactionNotes?.length ? `（${self.satisfactionNotes.slice(0, 2).join('・')}）` : ''}`,
     `${other.profile.name}への気持ち: 好感度 ${rel.affinity}（${affinityLabel(rel.affinity)}）／印象「${rel.impression}」`,
     ...between(sim, self, other),
+    ...orgLines(sim, self, other),
     ...section(
       '自分がしたことで、隠していること（話すかどうかは自分しだい。話せば相手は恨むかもしれないし、ほかの人に広めるかもしれない。村に知れれば集会で罰を受けることもある。黙っていれば、知られずに済むかもしれない）',
       secretsOf(sim, self),
@@ -299,7 +326,7 @@ export function buildAgreementMessages(
     '',
     `まとめ: ${summary}`,
     '',
-    `agreements の書き方: type は ${AGREEMENT_TYPES.join('/')}。trade は from=売る人・to=買う人・item・qty・money=代金の合計。gift は from=あげる人・to=もらう人・item と qty、または money。loan は from=貸す人・to=借りる人・money・days=返すまでの日数。repay は from=返す人・to=貸した人・money。hush は from=黙っていてほしい人・to=黙ると約束した人・口止め料があれば item・qty・money。hire は from=雇う人・to=雇われる人・work=仕事（${WORK_ACTIONS.map((w) => `${w}=${ACTIONS[w].label}`).join('、')}）・money=日給・days=日数。quit は from=辞める人・to=雇い主。teach は from=教える人・to=教わる人・work=教える仕事・money=教わる代金（その場で教える。教わる人は必ず代金を払う。教える人のほうが上手でないと効果はない）。promise は from=約束する人・to=相手・text=約束の中身。品物の item は ${ITEM_IDS.map((id) => `${id}=${ITEMS[id].name}`).join('、')}。`,
+    `agreements の書き方: type は ${AGREEMENT_TYPES.join('/')}。trade は from=売る人・to=買う人・item・qty・money=代金の合計。gift は from=あげる人・to=もらう人・item と qty、または money。loan は from=貸す人・to=借りる人・money・days=返すまでの日数。repay は from=返す人・to=貸した人・money。hush は from=黙っていてほしい人・to=黙ると約束した人・口止め料があれば item・qty・money。found_org は from=作ろうと言い出した人（代表になる）・to=一緒に作る人・org=組織の名前・text=目的・money=1日の会費（なければ0）。join_org は from=入る人・to=誘ったメンバー・org=組織の名前。leave_org は from=抜ける人・to=告げた相手・org=組織の名前。org_pay は from=組織の代表・to=受け取る人・org=組織の名前・money=金庫から渡す額・text=何のためか。hire は from=雇う人・to=雇われる人・work=仕事（${WORK_ACTIONS.map((w) => `${w}=${ACTIONS[w].label}`).join('、')}）・money=日給・days=日数。quit は from=辞める人・to=雇い主。teach は from=教える人・to=教わる人・work=教える仕事・money=教わる代金（その場で教える。教わる人は必ず代金を払う。教える人のほうが上手でないと効果はない）。promise は from=約束する人・to=相手・text=約束の中身。品物の item は ${ITEM_IDS.map((id) => `${id}=${ITEMS[id].name}`).join('、')}。`,
   ].join('\n');
   return [
     { role: 'system', content: AGREEMENT_SYSTEM },
@@ -327,6 +354,7 @@ export function buildAgreementSchema(ctx: ConversationContext): object {
             days: { type: 'integer', minimum: 0, maximum: 14 },
             work: { type: 'string', enum: [...WORK_ACTIONS, ''] },
             text: { type: 'string' },
+            org: { type: 'string' },
             quote: { type: 'string' },
           },
           required: ['type', 'quote', 'from', 'to'],

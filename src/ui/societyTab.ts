@@ -31,6 +31,7 @@ export class SocietyTab {
   render(): void {
     this.root.replaceChildren(
       this.overview(),
+      this.organizations(),
       this.laws(),
       this.assemblies(),
       this.deeds(),
@@ -79,6 +80,24 @@ export class SocietyTab {
         el('span', 'wealth-value', `${r.money}G・食べ物${foodValue(r.inventory)}`),
       );
       list.append(li);
+    }
+    s.append(list);
+    return s;
+  }
+
+  private organizations(): HTMLElement {
+    const s = this.section(`組織（${this.sim.organizations.length}）`);
+    if (this.sim.organizations.length === 0) {
+      s.append(el('p', 'mind-empty', 'まだ組織はない。村人が会話で作れば生まれる。'));
+      return s;
+    }
+    const list = el('ul', 'ties');
+    for (const o of this.sim.organizations) {
+      const name = (id: string) => this.sim.get(id)?.profile.name ?? '?';
+      const members = o.memberIds.map((id) => (id === o.leaderId ? `${name(id)}（代表）` : name(id))).join('、');
+      list.append(
+        el('li', '', `「${o.name}」${o.foundedDay}日目〜：${o.purpose}／${members}／会費1日${o.dues}G・金庫${o.treasury}G`),
+      );
     }
     s.append(list);
     return s;

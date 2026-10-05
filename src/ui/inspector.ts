@@ -88,6 +88,9 @@ export class Inspector {
       el('p', r.selfImage ? 'self-image' : 'mind-empty', r.selfImage || 'まだ自分がどんな人間なのか、分かっていない。'),
     );
     if (r.wish) section.append(el('p', 'wish', `望み：${r.wish}`));
+    for (const o of this.sim.orgsOf(r)) {
+      section.append(el('p', 'mind-money', `「${o.name}」の${o.leaderId === r.profile.id ? '代表' : 'メンバー'}（${o.purpose}）`));
+    }
     if (r.faith && (r.faith.heard > 0 || r.faith.sermons > 0)) {
       section.append(el('p', 'mind-money', `天の声：${r.faith.heard}回聞いた・${r.faith.sermons}回説かれた`));
     }

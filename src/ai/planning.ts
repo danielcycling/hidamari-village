@@ -430,6 +430,24 @@ function buildHint(r: Resident): string {
   return `（今は${HOME_LEVEL_NAMES[level]}。次の段「${HOME_LEVEL_NAMES[level + 1]}」まで木材があと${need}本。今の木材${countItem(r.inventory, 'wood')}本）`;
 }
 
+/** 入っている組織 */
+function orgSection(sim: Simulation, r: Resident): string[] {
+  const mine = sim.orgsOf(r).map((o) => {
+    const role = o.leaderId === r.profile.id ? '代表' : 'メンバー';
+    const others = o.memberIds.filter((id) => id !== r.profile.id).map((id) => sim.get(id)?.profile.name).filter(Boolean);
+    return `- 「${o.name}」の${role}：目的「${o.purpose}」、仲間 ${others.join('、') || 'なし'}、会費1日${o.dues}G、金庫${o.treasury}G`;
+  });
+  const all = sim.organizations
+    .filter((o) => !o.memberIds.includes(r.profile.id))
+    .map((o) => `- 「${o.name}」（代表 ${sim.get(o.leaderId)?.profile.name ?? '?'}、${o.memberIds.length}人）：${o.purpose}`);
+  return [
+    '',
+    '入っている組織:',
+    ...(mine.length ? mine : ['- なし（会話で、ほかの人と組織を作ったり、入れてもらったりできる）']),
+    ...(all.length ? ['村にあるほかの組織:', ...all] : []),
+  ];
+}
+
 function aboutMe(r: Resident): string {
   const skills = SKILL_IDS.map((s) => `${SKILLS[s]}${Math.round(r.skills[s])}`).join('・');
   const perishable = ITEM_IDS.filter((id) => ITEMS[id].shelfLife !== null && countItem(r.inventory, id) > 0)
@@ -515,6 +533,7 @@ export function buildPlanMessages(sim: Simulation, r: Resident, day: number): Ch
     '貸し借り・雇用:',
     ...(ties(sim, r).map((t) => `- ${t}`).concat(ties(sim, r).length === 0 ? ['- なし'] : [])),
     ...deedSections(sim, r),
+    ...orgSection(sim, r),
     '',
     '村の人たち:',
     othersReport(sim, r),
