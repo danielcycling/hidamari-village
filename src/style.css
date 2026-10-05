@@ -1061,3 +1061,93 @@ body {
   border: 1px solid var(--line);
   cursor: pointer;
 }
+
+/* ───────────── デスクトップ版：AIの準備 ───────────── */
+.setup {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: rgba(20, 17, 28, 0.88);
+}
+
+.setup-card {
+  width: min(560px, calc(100vw - 32px));
+  padding: 24px 28px;
+  background: var(--panel);
+  border: 2px solid var(--line);
+  color: var(--text);
+}
+
+.setup-card h2 {
+  margin: 0 0 12px;
+  color: var(--accent);
+  font-size: 20px;
+}
+
+.setup-card h3 {
+  margin: 8px 0;
+  font-size: 16px;
+}
+
+.setup-card p {
+  font-size: 14px;
+  line-height: 1.7;
+  margin: 6px 0;
+}
+
+.setup-message {
+  color: var(--muted);
+}
+
+.setup-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.setup-choices button {
+  font: inherit;
+  text-align: left;
+  padding: 10px 14px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.setup-choices button.primary {
+  border-color: var(--accent);
+}
+
+.setup-choices button small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.setup-bar {
+  height: 10px;
+  margin: 12px 0 4px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+.setup-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.setup-bar.busy i {
+  animation: blink 0.8s steps(2) infinite;
+}
+
+.setup-size {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+}

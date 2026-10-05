@@ -51,7 +51,20 @@ async function main() {
   if (save?.autoGod) autoGod.setEnabled(true);
   new GodPanel(sim, autoGod);
   const modelPicker = new ModelPicker(sim, llm);
-  void director.start(params.get('model') ?? savedModel());
+  // デスクトップ版は、村人の頭（Ollama とモデル）を準備してからつなぐ。ブラウザ版は Vite の中継につなぐ
+  void (async () => {
+    const { isTauri } = await import('@tauri-apps/api/core');
+    if (isTauri()) {
+      const { prepareDesktop } = await import('./desktop/setup');
+      const conn = await prepareDesktop();
+      if (!conn) {
+        sim.log('AIなしで始めた（村人はルールで暮らします）', 'system');
+        return;
+      }
+      llm.configure(conn.baseUrl, conn.fetchImpl);
+    }
+    await director.start(params.get('model') ?? savedModel());
+  })();
 
   // 開発中だけ、ブラウザのコンソールから村を触れるようにする（window.sim）
   if (import.meta.env.DEV) Object.assign(window, { sim });

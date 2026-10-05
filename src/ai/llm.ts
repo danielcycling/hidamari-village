@@ -49,13 +49,26 @@ export class OllamaClient {
   /** 応答待ちのリクエスト数 */
   private inFlight = 0;
 
-  constructor(private readonly baseUrl = '/ollama') {}
+  /**
+   * baseUrl：ブラウザ版は Vite の中継（/ollama）、デスクトップ版は Ollama そのもの。
+   * fetchImpl：デスクトップ版はアプリ本体を通して通信する（ブラウザの接続制限を受けないように）
+   */
+  constructor(
+    private baseUrl = '/ollama',
+    private fetchImpl: typeof fetch = (...args) => fetch(...args),
+  ) {}
+
+  /** つなぐ先を変える（デスクトップ版で、準備ができてから） */
+  configure(baseUrl: string, fetchImpl: typeof fetch): void {
+    this.baseUrl = baseUrl;
+    this.fetchImpl = fetchImpl;
+  }
 
   /** 使えるモデルを探して選ぶ。見つからなければ offline */
   async connect(requested?: string | null): Promise<void> {
     this.status = 'connecting';
     try {
-      const res = await fetch(`${this.baseUrl}/api/tags`);
+      const res = await this.fetchImpl(`${this.baseUrl}/api/tags`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { models: { name: string; size: number }[] };
       this.models = data.models
@@ -80,7 +93,7 @@ export class OllamaClient {
     this.model = name;
     this.thinking = false;
     try {
-      const res = await fetch(`${this.baseUrl}/api/show`, {
+      const res = await this.fetchImpl(`${this.baseUrl}/api/show`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: name }),
@@ -129,7 +142,7 @@ export class OllamaClient {
   }
 
   private async request<T>(messages: ChatMessage[], schema: object, signal: AbortSignal, maxTokens: number): Promise<T> {
-    const res = await fetch(`${this.baseUrl}/api/chat`, {
+    const res = await this.fetchImpl(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal,
@@ -151,7 +164,7 @@ export class OllamaClient {
 
   /** 最初の会話で待たされないよう、モデルを先にメモリへ載せておく */
   private async warmUp() {
-    await fetch(`${this.baseUrl}/api/generate`, {
+    await this.fetchImpl(`${this.baseUrl}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: this.model, keep_alive: '30m' }),
