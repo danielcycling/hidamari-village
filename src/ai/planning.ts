@@ -94,9 +94,9 @@ function actionCatalog(sim: Simulation, r: Resident): string {
     kill: '相手を殺し、相手の持ち物とお金をすべて自分のものにする。target に相手の名前。自分の体力が相手より多いほど、相手が弱っているほど成功しやすい。失敗すると相手は傷を負って逃げる。その場に誰もいなければ、誰がやったかは分からない',
     accuse: '広場で、ある人のことを村のみんなに言いふらす（本当のことでも嘘でもよい）。target に相手の名前、purpose に言いふらす中身',
     scavenge: `亡くなった人・出ていった人の空き家から、残された物とお金を持ち出す。target にその人の名前。誰の物でもないが、見られれば盗みと思われるかもしれない。${estateLine(sim)}`,
-    pray: `家で祈る。何に祈るかは自分しだい。purpose に祈りの言葉を書く。信じる教えがあれば offer にお供えのお金を書ける（教えの蓄えになる）`,
-    preach: `広場で、自分の信じることを村のみんなに説く。purpose に説く中身、faith_name に教えの名前を書く（初めて説くなら、それが新しい教えになる）。信じる人も、笑う人もいる`,
-    build_shrine: `信じる教えの祠を広場に建てる（木材${5}本）。祠があると、信じる人は手を合わせて心が落ち着く`,
+    pray: `家で祈る。何に祈るかは自分しだい。purpose に祈りの言葉を書く。信じる信仰があれば offer にお供えのお金を書ける（信仰の蓄えになる）`,
+    preach: `広場で、自分の信じることを村のみんなに説く。purpose に説く中身、faith_name に信仰の名前を書く（初めて説くなら、それが新しい信仰になる）。信じる人も、笑う人もいる`,
+    build_shrine: `信じる信仰の祠を広場に建てる（木材${5}本）。祠があると、信じる人は手を合わせて心が落ち着く`,
     mourn: `亡くなった人のお墓に参る。target に亡くなった人の名前。${sim.graves.length ? `お墓：${sim.graves.map((g) => g.name).join('、')}` : '今はお墓はない'}`,
     peddler: `広場に来た行商人と取引する（村の外とのお金のやりとり）。sell_items に売る品、buy_items に買う品を書く（食べ物は自分の食べる分を残して売る）。${peddlerLine(sim)}`,
     guard: `村の入り口で見張る。盗賊が来たとき、見張りが多く元気なほど追い払える（ひとりでは難しい）。追い払えば村の人から一目置かれるが、けがをすることもある。追い払えなければ、村じゅうの人の持ち物（食べ物・木材など）が3割奪われる。${raidLine(sim)}`,
@@ -445,13 +445,13 @@ function orgSection(sim: Simulation, r: Resident): string[] {
   const faiths = sim.organizations.filter((o) => o.kind === 'faith');
   const faithLines = [
     '',
-    '信じている教え:',
+    '信じている信仰:',
     myFaith
       ? `- 「${myFaith.name}」${myFaith.leaderId === r.profile.id ? '（自分が説きはじめた）' : ''}：${(myFaith.tenets ?? []).join('／')}。信じる人 ${myFaith.memberIds.map((id) => sim.get(id)?.profile.name).filter(Boolean).join('、')}${myFaith.shrine ? '、祠あり' : ''}、蓄え${myFaith.treasury}G`
       : '- なし（何かを信じるかどうか、何を信じるかは自分しだい）',
     ...faiths
       .filter((o) => o !== myFaith)
-      .map((o) => `- 村にある教え「${o.name}」（説く人 ${sim.get(o.leaderId)?.profile.name ?? '?'}、${o.memberIds.length}人）：${(o.tenets ?? []).slice(-2).join('／')}`),
+      .map((o) => `- 村にある信仰「${o.name}」（説く人 ${sim.get(o.leaderId)?.profile.name ?? '?'}、${o.memberIds.length}人）：${(o.tenets ?? []).slice(-2).join('／')}`),
   ];
   const mine = sim.orgsOf(r).filter((o) => o.kind !== 'faith').map((o) => {
     const role = o.leaderId === r.profile.id ? '代表' : 'メンバー';
@@ -797,7 +797,7 @@ const SELF_SYSTEM = `あなたは小さな村に暮らす村人本人です。�
   - 生き延びること以外でもよい。豊かになりたい、認められたい、誰かに勝ちたい、見返したい、あの人のようになりたい、楽をしたい、など。
   - きれいごとでなくてよい。欲・見栄・嫉妬・仕返しの気持ちがあれば、そのまま書く。
   - 経験や人間関係から自然に出てくるものにする。前の望みが続いていればそのままでも、変わってもよい。
-- 何かを信じている（教え・祈り・天の声・亡くなった人への思い など）なら、それをどう受け止めているか（信じる・疑う・恐れる・利用する）を自己像に入れてもよい。
+- 何かを信じている（信仰・祈り・天の声・亡くなった人への思い など）なら、それをどう受け止めているか（信じる・疑う・恐れる・利用する）を自己像に入れてもよい。
 - 出力はJSONのみ。`;
 
 export function buildSelfImageMessages(sim: Simulation, r: Resident): ChatMessage[] {

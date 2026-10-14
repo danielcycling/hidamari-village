@@ -129,7 +129,7 @@ const RAID_HOUR = 20;
 const RAID_TAKE = 0.3;
 /** 盗賊を追い払った見張りに、村の人が寄せる好感度 */
 const GUARD_RESPECT = 8;
-/** 祠に要る木材・教えに残る言葉の数 */
+/** 祠に要る木材・信仰に残る言葉の数 */
 const SHRINE_WOOD = 5;
 const MAX_TENETS = 4;
 /** 覚えておく祈りの数 */
@@ -400,7 +400,7 @@ export interface Organization {
   dues: number;
   treasury: number;
   foundedDay: number;
-  /** 教え（信仰の集まり）なら 'faith'。教えの中身と、祠があるか */
+  /** 信仰（信仰の集まり）なら 'faith'。信仰の中身と、祠があるか */
   kind?: 'faith';
   tenets?: string[];
   shrine?: boolean;
@@ -2269,12 +2269,12 @@ export class Simulation {
     this.map.places[id] = { id, name: `${grave.name}のお墓`, kind: 'public', spot: at };
   }
 
-  /** その人が信じている教え（なければ undefined） */
+  /** その人が信じている信仰（なければ undefined） */
   faithOf(r: Resident): Organization | undefined {
     return this.organizations.find((o) => o.kind === 'faith' && o.memberIds.includes(r.profile.id));
   }
 
-  /** 祈る。お供えがあれば、信じる教えの蓄えになる。祈りは神の力タブにも届く（見るだけで、応えなくてよい） */
+  /** 祈る。お供えがあれば、信じる信仰の蓄えになる。祈りは神の力タブにも届く（見るだけで、応えなくてよい） */
   private pray(r: Resident, task: Task) {
     if (!task.purpose) return;
     r.visited = { targetId: 'pray', until: this.taskEnd(r, task) };
@@ -2294,15 +2294,15 @@ export class Simulation {
   }
 
   /**
-   * 広場で教えを説く。初めて説く人は、その言葉から新しい教えを起こす（名前は本人がつける）。
-   * 教えを信じている人が説けば、その教えに言葉が加わる。聞いた人は信じるかもしれないし、笑うかもしれない
+   * 広場で信仰を説く。初めて説く人は、その言葉から新しい信仰を起こす（名前は本人がつける）。
+   * 信仰を信じている人が説けば、その信仰に言葉が加わる。聞いた人は信じるかもしれないし、笑うかもしれない
    */
   private preach(r: Resident, task: Task) {
     if (!task.purpose) return;
     r.visited = { targetId: 'preach', until: this.taskEnd(r, task) };
     let faith = this.faithOf(r);
     if (!faith) {
-      const name = (task.block?.faith ?? '').trim() || `${r.profile.name}の教え`;
+      const name = (task.block?.faith ?? '').trim() || `${r.profile.name}の信仰`;
       const same = this.organizations.find((o) => o.name === name);
       if (same && same.kind === 'faith') {
         same.memberIds.push(r.profile.id);
@@ -2338,7 +2338,7 @@ export class Simulation {
     }
   }
 
-  /** 信じる教えの祠を、広場に建てる（木材を使う） */
+  /** 信じる信仰の祠を、広場に建てる（木材を使う） */
   private buildShrine(r: Resident, task: Task) {
     r.visited = { targetId: 'build_shrine', until: this.taskEnd(r, task) };
     const faith = this.faithOf(r);

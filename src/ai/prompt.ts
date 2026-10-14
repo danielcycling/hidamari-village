@@ -125,7 +125,7 @@ const SYSTEM_PROMPT = `あなたは小さな村「ひだまり村」の観察記
 - 好感度は会話の内容に応じて -15〜+15 の範囲で変える。上がることも下がることも同じくらい普通にある。
 - 持っていない物やお金は渡せない。やりとりは、それぞれが持っている範囲でしか決まらない。
 - 2人以上で、組織（集まり・組合・自警団・互助会など、名前も目的も自由）を作ったり、誘って入れたり、抜けたりできる。組織は、名前と目的を決めればその場で作れる（話し合いを先延ばしにしなくてよい）。会費と金庫も持たせられる。
-- 何かを信じるかどうか、何を信じるかは人それぞれ。教えを説かれて信じる人も、疑う人も、笑う人もいる。信じることにしたら、その教えの仲間になれる。
+- 何かを信じるかどうか、何を信じるかは人それぞれ。信仰を説かれて信じる人も、疑う人も、笑う人もいる。信じることにしたら、その信仰の仲間になれる。
 - 腕前を教わるには、教わる側が教える側に代金を払う。腕前は財産なので、安くはない（上手な人ほど高く求めてよい）。
 - セリフ・summary・memory・impression は**すべて自然な日本語**で書く。英語や他の言語の単語を混ぜない。
 - 出力は指定のJSONのみ。`;
@@ -185,8 +185,8 @@ function between(sim: Simulation, self: Resident, other: Resident): string[] {
 function orgLines(sim: Simulation, self: Resident, other: Resident): string[] {
   return sim.orgsOf(self).map((o) => {
     if (o.kind === 'faith') {
-      const together = o.memberIds.includes(other.profile.id) ? `（${other.profile.name}も同じ教えを信じている）` : '';
-      return `「${o.name}」を信じている${together}：教え「${(o.tenets ?? []).join('／')}」`;
+      const together = o.memberIds.includes(other.profile.id) ? `（${other.profile.name}も同じ信仰を信じている）` : '';
+      return `「${o.name}」を信じている${together}：信仰「${(o.tenets ?? []).join('／')}」`;
     }
     const role = o.leaderId === self.profile.id ? '代表' : 'メンバー';
     const together = o.memberIds.includes(other.profile.id) ? `（${other.profile.name}も仲間）` : '';
@@ -296,7 +296,7 @@ const AGREEMENT_SYSTEM = `あなたは村の記録係です。村人2人の会�
 - 会話の中で物を「もらう」「分けてもらう」「借りる」と決まったら gift（品物）。あとで返す約束もしていれば、それは promise として別に書く。
 - お金の貸し借りは loan、借りたお金を返すのは repay。代金を払って物を受け取るのは trade。
 - 「手伝う」「明日〜する」のような、その場では何も動かない約束は promise。
-- 相手の説く教えを信じることにしたら join_org（from=信じることにした人、to=教えを信じている人、org=教えの名前）。信じるのをやめるなら leave_org。
+- 相手の説く信仰を信じることにしたら join_org（from=信じることにした人、to=信仰を信じている人、org=信仰の名前）。信じるのをやめるなら leave_org。
 - 2人が組織（組合・団・会など）を作ること自体に同意していれば found_org。名前が決まっていなければ「（言い出した人の名前）と（相手の名前）の会」のように仮の名前をつけ、目的は会話から書く。
 - 誰かに、自分のしたことを黙っていてもらう約束がまとまったら hush（from=黙っていてほしい人、to=黙ると約束した人。口止め料があれば item・qty・money）。
 - feelings には、それぞれの人物がこの会話のあと相手をどう感じたか（change は -15〜+15）と、その理由（reason、30文字以内）を書く。言葉が丁寧でも、頼みを断られた・損をさせられた・約束を破られた・見下された・相手だけが得をしたなら下がる。実際に助けられた・得をしたなら上がる。何も起きなければ 0。2人の状況（飢えているか、持っているか）も踏まえて、人間らしく冷静に判断する。

@@ -123,8 +123,10 @@ export class LifePlanner {
     const n = this.sim.residents.length;
     // 暮らしは習慣：考え直すのは2日に1度（人によって日をずらす）。困っているときや、
     // 昨日の計画が自分で考えたものでなかったときは、毎晩考え直す。それ以外は今日と同じように過ごす
+    // 明日、行商人や盗賊が来るなら、みんな考え直す（いつもと違う一日になるので）
+    const eventful = this.sim.peddler.nextDay === day + 1 || this.sim.raid?.day === day + 1;
     const rethink = this.sim.residents.filter((r, i) => {
-      if (r.plan?.source !== 'ai') return true;
+      if (eventful || r.plan?.source !== 'ai') return true;
       if (r.satiety < 40 || foodValue(r.inventory) < DAILY_NEED) return true;
       return (i + day) % 2 === 0;
     });

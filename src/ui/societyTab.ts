@@ -90,7 +90,7 @@ export class SocietyTab {
   private organizations(): HTMLElement {
     const orgs = this.sim.organizations.filter((o) => o.kind !== 'faith');
     const faiths = this.sim.organizations.filter((o) => o.kind === 'faith');
-    const s = this.section(`組織（${orgs.length}）・教え（${faiths.length}）`);
+    const s = this.section(`組織（${orgs.length}）・信仰（${faiths.length}）`);
     for (const f of faiths) {
       const name = (id: string) => this.sim.get(id)?.profile.name ?? '?';
       s.append(

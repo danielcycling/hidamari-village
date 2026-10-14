@@ -45,7 +45,7 @@ function personSection(sim: Simulation, r: Resident, a: Assembly): string {
     ...((r.homeLevel ?? 0) > 0 ? [`住まい: ${HOME_LEVEL_NAMES[r.homeLevel ?? 0]}（村の人から一目置かれている）`] : []),
     ...sim.orgsOf(r).map((o) =>
       o.kind === 'faith'
-        ? `「${o.name}」を信じている（教え：${(o.tenets ?? []).slice(-2).join('／')}）`
+        ? `「${o.name}」を信じている（信仰：${(o.tenets ?? []).slice(-2).join('／')}）`
         : `「${o.name}」の${o.leaderId === r.profile.id ? '代表' : 'メンバー'}（${o.purpose}）`,
     ),
     ...[rel(a.callerId), rel(a.targetId)].filter(Boolean),
