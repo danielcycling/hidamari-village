@@ -1,6 +1,17 @@
 // ───────────── 品物 ─────────────
 
-export type ItemId = 'wheat' | 'vegetable' | 'fish' | 'bread' | 'meal' | 'wood' | 'drink';
+export type ItemId =
+  | 'wheat'
+  | 'vegetable'
+  | 'fish'
+  | 'bread'
+  | 'meal'
+  | 'wood'
+  | 'drink'
+  | 'preserved'
+  | 'medicine'
+  | 'tool'
+  | 'ornament';
 
 export interface ItemDef {
   name: string;
@@ -24,7 +35,34 @@ export const ITEMS: Record<ItemId, ItemDef> = {
   // 生き延びるのには要らないもの（家を立派にする・気分をよくする）
   wood: { name: '木材', satiety: 0, shelfLife: null, fallbackPrice: 6 },
   drink: { name: 'お酒', satiety: 0, shelfLife: null, fallbackPrice: 15 },
+  // 村では作れず、行商人からしか買えないもの
+  preserved: { name: '保存食', satiety: 40, shelfLife: null, fallbackPrice: 25 },
+  medicine: { name: '薬', satiety: 0, shelfLife: null, fallbackPrice: 40 },
+  tool: { name: '道具', satiety: 0, shelfLife: null, fallbackPrice: 60 },
+  ornament: { name: '飾り', satiety: 0, shelfLife: null, fallbackPrice: 50 },
 };
+
+// ───────────── 行商人（村の外とのお金の出入り） ─────────────
+
+/** 行商人が買い取る値段のもと（季節や、その日にどれだけ買ったかで変わる）。村の外からお金が入る */
+export const PEDDLER_BUY: Partial<Record<ItemId, number>> = {
+  wheat: 3,
+  vegetable: 3,
+  fish: 6,
+  bread: 9,
+  meal: 14,
+  wood: 8,
+  drink: 20,
+};
+/** 行商人が売る、村では作れないもの。村のお金が外へ出る */
+export const PEDDLER_GOODS: ItemId[] = ['preserved', 'medicine', 'tool', 'ornament'];
+export const PEDDLER_SELL: Partial<Record<ItemId, number>> = { preserved: 25, medicine: 40, tool: 60, ornament: 50 };
+/** 行商人が1回の訪問で払えるお金の上限 */
+export const PEDDLER_BUDGET = 160;
+/** 道具を持っていると、仕事がこれだけはかどる */
+export const TOOL_BOOST = 1.15;
+/** 薬1つで戻る体力 */
+export const MEDICINE_HEAL = 40;
 
 export const ITEM_IDS = Object.keys(ITEMS) as ItemId[];
 export const isFood = (id: ItemId) => ITEMS[id].satiety > 0;
@@ -183,6 +221,6 @@ export const STARTING_FOOD: [ItemId, number][] = [
   ['bread', 3],
   ['vegetable', 4],
 ];
-/** お金は村の中で保存するので、新入村民は無一文でやってくる */
-export const NEWCOMER_MONEY = 0;
+/** 新入村民は、少しの蓄えを持ってやってくる（村の外からお金が入る）。この範囲でばらつく */
+export const NEWCOMER_MONEY: [number, number] = [10, 50];
 export const NEWCOMER_FOOD: [ItemId, number][] = [['bread', 1]];

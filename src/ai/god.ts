@@ -1,7 +1,7 @@
-import { describeInventory, NEWCOMER_FOOD, NEWCOMER_MONEY } from '../world/economy';
+import { describeInventory, NEWCOMER_FOOD } from '../world/economy';
 import { VILLAGE_ENTRANCE } from '../world/mapgen';
 import { pickName, randomPalette, type ResidentProfile } from '../world/residents';
-import type { Resident, Simulation } from '../world/sim';
+import { newcomerMoney, type Resident, type Simulation } from '../world/sim';
 import type { ChatMessage, OllamaClient } from './llm';
 import { affinityLabel, bestSkills, hungerLabel } from './prompt';
 
@@ -36,7 +36,7 @@ export const PRESETS: GodPreset[] = [
     id: 'peddler',
     icon: '🧳',
     label: '行商人が来る',
-    run: (sim) => sim.announce('珍しい品を売る旅の行商人が村にやってきた。妙に村人のことに詳しいらしい'),
+    run: (sim) => sim.callPeddler(),
   },
   {
     id: 'letter',
@@ -67,7 +67,7 @@ export function welcomeNewcomer(sim: Simulation, name = ''): Resident | null {
     homeId,
     colors: randomPalette(),
   };
-  return sim.addNewcomer(profile, VILLAGE_ENTRANCE, NEWCOMER_MONEY, NEWCOMER_FOOD);
+  return sim.addNewcomer(profile, VILLAGE_ENTRANCE, newcomerMoney(Math.random), NEWCOMER_FOOD);
 }
 
 // ───────────── おまかせモード ─────────────

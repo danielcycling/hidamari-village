@@ -60,7 +60,9 @@ for (let d = 1; d <= days; d++) {
       14,
     )}  ${pad(trades, 6)}  ${skills}`,
   );
-  if (sim.totalMoney() !== totalMoney) console.log(`  !! お金の総量が変わった: ${totalMoney} → ${sim.totalMoney()}`);
+  // 村の外との出入り（行商人・やってきた人・出ていった人）を差し引いて、勝手に増えたり減ったりしていないか
+  const expected = totalMoney + sim.moneyFlow.in - sim.moneyFlow.out;
+  if (sim.totalMoney() !== expected) console.log(`  !! お金の計算が合わない: 期待 ${expected} / 実際 ${sim.totalMoney()}`);
 }
 console.log(`graves: ${sim.graves.map((g) => `${g.name}(${g.day}日目)`).join(', ') || 'なし'}`);
 await server.close();

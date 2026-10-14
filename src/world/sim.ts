@@ -41,7 +41,13 @@ import {
   ITEM_IDS,
   ITEMS,
   NEWCOMER_FOOD,
+  MEDICINE_HEAL,
   NEWCOMER_MONEY,
+  PEDDLER_BUDGET,
+  PEDDLER_BUY,
+  PEDDLER_GOODS,
+  PEDDLER_SELL,
+  TOOL_BOOST,
   nextToEat,
   practice,
   removeSpoiled,
@@ -110,6 +116,11 @@ const BUY_INTERVAL = 15;
 export const PLANNING_HOUR = 21;
 /** 新入村民が来るかどうかを判定する時刻（時） */
 const IMMIGRATION_HOUR = 10;
+/** 行商人：最初に来る日・来る間隔（日）・広場にいる時間 */
+const PEDDLER_FIRST_DAY = 3;
+const PEDDLER_INTERVAL: [number, number] = [3, 5];
+const PEDDLER_FROM = 9;
+const PEDDLER_TO = 17;
 /** 盗賊：来はじめる日・1日に来る確率（冬はさらに上がる）・来る時刻・追い払えなかったときに奪われる割合 */
 const RAID_FIRST_DAY = 3;
 const RAID_CHANCE = 0.05;
@@ -360,6 +371,19 @@ export type AgreementType =
   | 'join_org'
   | 'leave_org'
   | 'org_pay';
+
+/** 行商人。数日おきに来て、広場で村の品を買い取り、村にない品を売る */
+export interface Peddler {
+  nextDay: number;
+  visit: {
+    day: number;
+    /** 残りの買い取り予算 */
+    budget: number;
+    /** その日の買い取り値（季節で変わる。買うほど下がる） */
+    buyPrices: Partial<Record<ItemId, number>>;
+    bought: Partial<Record<ItemId, number>>;
+  } | null;
+}
 
 /** 村人が作った組織（自警団・組合・互助会・秘密の集まり…何になるかは村人しだい） */
 export interface Organization {
@@ -680,6 +704,10 @@ export class Simulation {
   /** 村人が作った組織 */
   readonly organizations: Organization[] = [];
   orgSeq = 0;
+  /** 村の外とのお金の出入り（行商人・やってきた人・出ていった人）。村のお金の合計 ＝ 最初の額 ＋ in − out */
+  readonly moneyFlow = { in: 0, out: 0 };
+  /** 行商人：次に来る日と、来ているあいだの様子 */
+  peddler: Peddler = { nextDay: PEDDLER_FIRST_DAY, visit: null };
   /** やってくる盗賊（その日の夜に来る。前の日に知らせがある） */
   raid: { day: number } | null = null;
   /** 村人の祈り（神さまである観察者に届く） */
@@ -966,7 +994,7 @@ export class Simulation {
       homeId,
       colors: randomPalette(this.rng),
     };
-    const r = this.addNewcomer(profile, VILLAGE_ENTRANCE, NEWCOMER_MONEY, NEWCOMER_FOOD);
+    const r = this.addNewcomer(profile, VILLAGE_ENTRANCE, newcomerMoney(this.rng), NEWCOMER_FOOD);
     if (reason) this.remember(r, reason);
     return r;
   }
@@ -974,6 +1002,7 @@ export class Simulation {
   /** 新入村民を迎える。村の西の端から歩いてやってくる */
   addNewcomer(profile: ResidentProfile, entrance: Point, money: number, food: [ItemId, number][]): Resident {
     const r = this.createResident(profile, { money, food, at: entrance, indoors: false });
+    this.moneyFlow.in += money;
     this.map.places[profile.homeId].name = `${profile.name}の家`;
     this.remember(r, 'ひだまり村にやってきた。知り合いはまだいない');
     // 空き家に前の住人の物が残っていれば、住む人のものになる
@@ -1075,7 +1104,8 @@ export class Simulation {
     if (r.conversation) this.finishConversation(r.conversation);
     this.residents.splice(this.residents.indexOf(r), 1);
     const home = this.map.places[r.profile.homeId];
-    this.estates[home.id] = { ownerName: r.profile.name, money: r.money, inventory: r.inventory, day: this.clock.day };
+    // 出ていく人は、持ち物もお金も持っていく（村のお金が外へ出る）
+    this.moneyFlow.out += r.money;
     home.name = '空き家';
     for (const o of this.residents) this.remember(o, `${r.profile.name}が村を出て行った`);
     this.announce(`${r.profile.name}が村を出て行った（${r.leaving}）`, 'life');
@@ -1123,6 +1153,8 @@ export class Simulation {
     }
     if (h >= WEATHER_HOUR && h < WEATHER_HOUR + 1) this.startDayWeather();
     if (h >= RAID_HOUR && h < RAID_HOUR + 1 && this.raid?.day === this.clock.day) this.resolveRaid();
+    if (h >= PEDDLER_FROM && h < PEDDLER_TO && !this.peddler.visit && this.peddler.nextDay === this.clock.day) this.peddlerArrives();
+    if (h >= PEDDLER_TO && this.peddler.visit) this.peddlerLeaves();
     if (h >= IMMIGRATION_HOUR && h < IMMIGRATION_HOUR + 1) this.tryImmigration();
     if (h >= PLANNING_HOUR && this.lastEveningDay !== this.clock.day) {
       this.lastEveningDay = this.clock.day;
@@ -1273,6 +1305,7 @@ export class Simulation {
         skills: r.skills,
         rng: this.rng,
         employedAs: this.employmentOf(r)?.action,
+        peddlerToday: this.peddler.nextDay === this.clock.day,
       });
     r.plan = plan;
     // 飢えて決めた臨時の行動（夜明け前に決めることが多い）は、時間が来るまで続ける
@@ -1366,6 +1399,7 @@ export class Simulation {
       this.announce(CONDITIONS[c.kind].end, 'system');
     }
     this.maybeScheduleRaid(day);
+    if (day === this.peddler.nextDay - 1) this.announce('明日、村に行商人が来るらしい', 'system');
     const fresh = rollCondition(this.weatherRng, this.conditions, day);
     if (fresh) {
       this.conditions.push(fresh);
@@ -1550,6 +1584,13 @@ export class Simulation {
       this.maybeEat(r);
       this.maybeDrink(r);
     }
+    // 弱っていて薬があれば飲む
+    if (r.health < 50 && countItem(r.inventory, 'medicine') > 0) {
+      takeItem(r.inventory, 'medicine', 1);
+      r.health = Math.min(100, r.health + MEDICINE_HEAL);
+      this.log(`${r.profile.name}は薬を飲んで、少し元気になった`, 'life');
+      this.remember(r, '弱っていたので薬を飲んだ');
+    }
 
     if (before >= HUNGRY_BELOW && r.satiety < HUNGRY_BELOW) {
       this.log(`${r.profile.name}はお腹を空かせている（食べ物 ${describeInventory(r.inventory)}、所持金${r.money}G）`, 'life');
@@ -1574,6 +1615,7 @@ export class Simulation {
     else if (ateKinds.length === 1 && (t.ate[ateKinds[0]] ?? 0) >= 2) notes.push({ text: `${ITEMS[ateKinds[0]].name}ばかりで飽きた`, delta: -6 });
     if ((t.ate.meal ?? 0) > 0) notes.push({ text: '定食を味わえた', delta: 5 });
     if ((t.drank ?? 0) > 0) notes.push({ text: 'お酒を飲んでくつろいだ', delta: 0 });
+    if (countItem(r.inventory, 'ornament') > 0) notes.push({ text: '飾りを眺めると心がなごむ', delta: 4 });
     if ((t.talks ?? 0) === 0) notes.push({ text: '誰ともちゃんと話していない', delta: -8 });
     else if ((t.talks ?? 0) >= 3) notes.push({ text: '人とたくさん話した', delta: 4 });
     // 家は誰からも見えるので、比べてしまう
@@ -1706,6 +1748,10 @@ export class Simulation {
       }
       action = 'wander';
     }
+    if (action === 'peddler') {
+      const done = r.visited && r.visited.targetId === 'peddler' && now < r.visited.until;
+      if (!this.peddler.visit || done) action = this.peddler.visit ? 'wander' : 'sell';
+    }
     if (action === 'scavenge') {
       const est = target ? this.estates[target] : undefined;
       const done = r.visited && r.visited.targetId === `estate:${target}` && now < r.visited.until;
@@ -1784,6 +1830,9 @@ export class Simulation {
         break;
       case 'scavenge':
         this.scavenge(r, task);
+        break;
+      case 'peddler':
+        this.tradeWithPeddler(r, task);
         break;
       case 'pray':
         this.pray(r, task);
@@ -1865,7 +1914,8 @@ export class Simulation {
   private work(r: Resident, skill: SkillId, dt: number): number {
     r.skills[skill] = practice(r.skills[skill], dt);
     // 満ち足りていると仕事がはかどり、不満だとやる気が出ない
-    return skillFactor(r.skills[skill]) * moodFactor(r.satisfaction ?? 50);
+    const tool = countItem(r.inventory, 'tool') > 0 ? TOOL_BOOST : 1;
+    return skillFactor(r.skills[skill]) * moodFactor(r.satisfaction ?? 50) * tool;
   }
 
   /** 端数は働いた本人が持ち、1個になったら持ち主のものになる */
@@ -2476,6 +2526,104 @@ export class Simulation {
   /** その人がしたこと（隠していること） */
   deedsBy(r: Resident): Deed[] {
     return this.deeds.filter((d) => d.actorId === r.profile.id);
+  }
+
+  // ───────────── 行商人 ─────────────
+
+  /** 神さまの力：行商人を呼ぶ（今日まだ間に合えば今日、だめなら明日） */
+  callPeddler(): void {
+    if (this.peddler.visit) return;
+    const today = this.clock.hourOfDay < PEDDLER_TO - 2;
+    this.peddler.nextDay = this.clock.day + (today ? 0 : 1);
+    this.announce(today ? '行商人が村に向かっているらしい' : '明日、村に行商人が来るらしい', 'system');
+  }
+
+  private peddlerArrives() {
+    const season = seasonOf(this.clock.day);
+    const buyPrices: Partial<Record<ItemId, number>> = {};
+    for (const [id, base] of Object.entries(PEDDLER_BUY) as [ItemId, number][]) {
+      // 冬は食べ物が高く売れ、秋の実りの時期は安くなる
+      const seasonal = isFood(id) ? (season === 'winter' ? 1.5 : season === 'autumn' ? 0.8 : 1) : 1;
+      buyPrices[id] = Math.max(1, Math.round(base * seasonal * (0.85 + this.rng() * 0.3)));
+    }
+    this.peddler.visit = { day: this.clock.day, budget: PEDDLER_BUDGET, buyPrices, bought: {} };
+    this.announce(`行商人が広場にやってきた（${PEDDLER_TO}時まで）。${this.peddlerOffer()}`, 'system');
+  }
+
+  private peddlerLeaves() {
+    const v = this.peddler.visit;
+    this.peddler.visit = null;
+    this.peddler.nextDay = this.clock.day + PEDDLER_INTERVAL[0] + Math.floor(this.rng() * (PEDDLER_INTERVAL[1] - PEDDLER_INTERVAL[0] + 1));
+    if (v) this.log(`行商人は村を去った（次は${this.peddler.nextDay}日目ごろ）`, 'system');
+  }
+
+  /** 行商人の買い取り値と売り物（村じゅうが見聞きできる） */
+  peddlerOffer(): string {
+    const v = this.peddler.visit;
+    const buy = v ? ITEM_IDS.filter((id) => v.buyPrices[id]).map((id) => `${ITEMS[id].name}${this.peddlerBuyPrice(id)}G`) : [];
+    const sell = PEDDLER_GOODS.map((id) => `${ITEMS[id].name}${PEDDLER_SELL[id]}G`);
+    return `${buy.length ? `買い取り：${buy.join('・')}。` : ''}売り物：${sell.join('・')}`;
+  }
+
+  /** 今の買い取り値（同じ品を買うほど下がる。もとの4割より下がらない） */
+  private peddlerBuyPrice(id: ItemId): number {
+    const v = this.peddler.visit;
+    const base = v?.buyPrices[id];
+    if (!v || !base) return 0;
+    return Math.max(Math.ceil(base * 0.4), Math.round(base * (1 - 0.05 * (v.bought[id] ?? 0))));
+  }
+
+  /** 行商人と取引する：決めた品を売り（なければ余りを売る）、決めた品を買う */
+  private tradeWithPeddler(r: Resident, task: Task) {
+    const v = this.peddler.visit;
+    if (!v) return;
+    r.visited = { targetId: 'peddler', until: this.taskEnd(r, task) };
+    const sold: string[] = [];
+    let earned = 0;
+    const wanted = task.block?.sellItems?.length
+      ? task.block.sellItems
+      : ITEM_IDS.filter((id) => PEDDLER_BUY[id] && id !== 'wheat');
+    for (const id of wanted) {
+      if (!v.buyPrices[id]) continue;
+      // 食べ物は自分の食べる分を残す
+      let n = isFood(id) ? this.sellable(r, id) : countItem(r.inventory, id);
+      let count = 0;
+      while (n > 0) {
+        const price = this.peddlerBuyPrice(id);
+        if (price <= 0 || v.budget < price) break;
+        takeItem(r.inventory, id, 1);
+        r.money += price;
+        r.today.earned += price;
+        v.budget -= price;
+        v.bought[id] = (v.bought[id] ?? 0) + 1;
+        this.moneyFlow.in += price;
+        earned += price;
+        count++;
+        n--;
+      }
+      if (count) sold.push(`${ITEMS[id].name}${count}個`);
+    }
+    const bought: string[] = [];
+    let spent = 0;
+    for (const id of task.block?.buyItems ?? []) {
+      const price = PEDDLER_SELL[id];
+      if (!price || r.money < price) continue;
+      r.money -= price;
+      r.today.spent += price;
+      this.moneyFlow.out += price;
+      addItem(r.inventory, id, 1, this.clock.minutes, null);
+      spent += price;
+      bought.push(ITEMS[id].name);
+    }
+    if (!sold.length && !bought.length) {
+      this.remember(r, `行商人のところへ行ったが、取引はしなかった（${v.budget <= 0 ? '行商人のお金が尽きていた' : '売るものも買えるものもなかった'}）`);
+      return;
+    }
+    const text = [sold.length ? `${sold.join('・')}を売って${earned}G` : '', bought.length ? `${bought.join('・')}を${spent}Gで買った` : '']
+      .filter(Boolean)
+      .join('、');
+    this.log(`${r.profile.name}が行商人と取引した：${text}`, 'trade');
+    this.remember(r, `行商人と取引した：${text}`);
   }
 
   // ───────────── 組織 ─────────────
@@ -3281,4 +3429,9 @@ export function shiftAffinity(current: number, delta: number): number {
   const sameWay = Math.sign(delta) === Math.sign(current);
   const room = sameWay ? 1 - Math.min(1, Math.abs(current) / 100) * 0.7 : 1;
   return Math.max(-100, Math.min(100, Math.round((current + delta * room) * 10) / 10));
+}
+
+/** 新しく来る人が持ってくる蓄え */
+export function newcomerMoney(rng: Rng): number {
+  return NEWCOMER_MONEY[0] + Math.floor(rng() * (NEWCOMER_MONEY[1] - NEWCOMER_MONEY[0] + 1));
 }

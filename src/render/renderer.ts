@@ -62,6 +62,7 @@ export class Renderer {
     const hour = sim.clock.hourOfDay;
     const festival = sim.activeGathering();
     if (festival) this.drawLanterns(festival.placeId, now);
+    if (sim.peddler.visit) this.drawPeddler();
     if (sim.weather.kind === 'rain' || sim.weather.kind === 'storm') this.drawRain(now, sim.weather.kind === 'storm');
     else if (sim.weather.kind === 'cloudy') this.drawClouds();
     this.drawLighting(sim, hour);
@@ -238,6 +239,40 @@ export class Renderer {
     ctx.fillStyle = '#6f7480';
     ctx.fillRect(x + 3, y + 3, 2, 5);
     ctx.fillRect(x + 2, y + 4, 4, 1);
+  }
+
+  /** 広場の行商人の荷車 */
+  private drawPeddler() {
+    const { ctx, map } = this;
+    const area = map.places.plaza.area;
+    if (!area) return;
+    const x = (area.x + area.w - 3) * TILE;
+    const y = (area.y + 1) * TILE;
+    // 荷台と車輪
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.fillRect(x + 1, y + 13, 26, 3);
+    ctx.fillStyle = '#8a5a32';
+    ctx.fillRect(x, y + 4, 26, 8);
+    ctx.fillStyle = '#6b4424';
+    ctx.fillRect(x, y + 11, 26, 1);
+    ctx.fillStyle = '#3a2a1a';
+    ctx.fillRect(x + 3, y + 11, 4, 4);
+    ctx.fillRect(x + 19, y + 11, 4, 4);
+    // 荷物（色とりどりの包み）と日よけ
+    for (const [i, c] of ['#e45874', '#ffcf5c', '#6fd08c', '#8ad0ff'].entries()) {
+      ctx.fillStyle = c;
+      ctx.fillRect(x + 2 + i * 6, y, 5, 4);
+    }
+    ctx.fillStyle = '#f3ecdf';
+    ctx.fillRect(x - 1, y - 4, 28, 3);
+    ctx.fillStyle = '#c0504d';
+    for (let i = 0; i < 28; i += 4) ctx.fillRect(x - 1 + i, y - 4, 2, 3);
+    // 行商人
+    ctx.fillStyle = '#f1c9a5';
+    ctx.fillRect(x + 29, y + 3, 4, 4);
+    ctx.fillStyle = '#5a4a7a';
+    ctx.fillRect(x + 28, y + 7, 6, 7);
+    label(ctx, '行商人', x + 13, y - 6, 5, '#fff8e6');
   }
 
   private drawClouds() {

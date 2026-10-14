@@ -58,6 +58,8 @@ export class SocietyTab {
     const stats = el('ul', 'society-stats');
     for (const line of [
       `住民 ${people.length}人・お墓 ${sim.graves.length}`,
+      `村のお金 ${sim.totalMoney()}G（村の外から入った ${sim.moneyFlow.in}G・外へ出た ${sim.moneyFlow.out}G）`,
+      sim.peddler.visit ? `行商人が来ている（${sim.peddlerOffer()}）` : `次の行商人 ${sim.peddler.nextDay}日目ごろ`,
       `村にある食べ物 満腹度${food}（全員で1日に要るのは${need}、およそ${(food / Math.max(1, need)).toFixed(1)}日分）`,
       `空 ${sky}${conds.length ? `・${conds.join('・')}` : ''}`,
     ]) {

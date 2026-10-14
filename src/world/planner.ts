@@ -34,7 +34,8 @@ export type ActionId =
   | 'scavenge'
   | 'pray'
   | 'preach'
-  | 'guard';
+  | 'guard'
+  | 'peddler';
 
 /** 相手のいるところへ行ってする行動（target が要る） */
 export const TARGETED_ACTIONS: ActionId[] = ['visit', 'steal', 'rob', 'attack', 'kill'];
@@ -71,6 +72,8 @@ export const ACTIONS: Record<ActionId, ActionDef> = {
   preach: { label: '天の声を説く', place: 'plaza' },
   // 村の入り口で見張る（盗賊が来たときに追い払う）
   guard: { label: '見張り', place: 'gate' },
+  // 広場に来た行商人と取引する（村の外とお金をやりとりする）
+  peddler: { label: '行商人と取引する', place: 'plaza' },
   sell: { label: '市場で売る', place: 'plaza' },
   buy: { label: '市場で買う', place: 'plaza' },
   // 相手のいる場所へ行く（場所は相手しだい）
@@ -98,6 +101,9 @@ export interface PlanBlock {
   action: ActionId;
   /** sell のときの値段 */
   prices?: Partial<Record<ItemId, number>>;
+  /** 行商人に売るもの・買うもの */
+  sellItems?: ItemId[];
+  buyItems?: ItemId[];
   /** visit・非行の相手（住民ID）と目的（accuse なら言いふらす中身） */
   target?: string;
   purpose?: string;
@@ -129,13 +135,15 @@ export interface PlannerInput {
   rng: Rng;
   /** 雇われているなら、その仕事 */
   employedAs?: WorkAction;
+  /** 今日、行商人が来るか */
+  peddlerToday?: boolean;
 }
 
 /**
  * ルールで1日の計画を立てる（LLMが使えないときの代役）。
  * 午前は材料を作り、昼と夕方に市場へ行き、午後は材料があれば加工する。
  */
-export function rulePlan({ day, inventory, money, skills, rng, employedAs }: PlannerInput): DailyPlan {
+export function rulePlan({ day, inventory, money, skills, rng, employedAs, peddlerToday }: PlannerInput): DailyPlan {
   if (employedAs) {
     return {
       day,
@@ -168,7 +176,8 @@ export function rulePlan({ day, inventory, money, skills, rng, employedAs }: Pla
   const blocks: PlanBlock[] = [
     { from: 6, to: 7, action: 'rest' },
     { from: 7, to: 11.5, action: primary },
-    { from: 11.5, to: 13, action: market, prices },
+    // 行商人が来る日は、余りを行商人に売る
+    peddlerToday && market === 'sell' ? { from: 11.5, to: 13, action: 'peddler' } : { from: 11.5, to: 13, action: market, prices },
     { from: 13, to: 15, action: craft },
     { from: 15, to: 17, action: primary },
     { from: 17, to: 18.5, action: market === 'buy' ? 'buy' : 'sell', prices },
