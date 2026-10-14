@@ -95,7 +95,7 @@ export class GodPanel {
     const prayers = [...this.sim.prayers].reverse().slice(0, 8);
     if (prayers.length === 0) {
       const li = document.createElement('li');
-      li.textContent = 'まだ祈りは届いていません。天の声を聞いた村人は、祈るようになるかもしれません。';
+      li.textContent = 'まだ祈りは届いていません。村人が何かに祈るようになれば、ここに届きます（応えなくても構いません）。';
       list.replaceChildren(li);
       return;
     }

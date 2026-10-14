@@ -229,6 +229,7 @@ export function restore(sim: Simulation, data: SaveData): void {
     });
   }
   replace(sim.graves, data.graves);
+  for (const g of sim.graves) sim.registerGrave(g);
   for (const k of Object.keys(sim.estates)) delete sim.estates[k];
   Object.assign(sim.estates, data.estates);
   if (data.market) sim.market = data.market;

@@ -35,7 +35,9 @@ export type ActionId =
   | 'pray'
   | 'preach'
   | 'guard'
-  | 'peddler';
+  | 'peddler'
+  | 'build_shrine'
+  | 'mourn';
 
 /** 相手のいるところへ行ってする行動（target が要る） */
 export const TARGETED_ACTIONS: ActionId[] = ['visit', 'steal', 'rob', 'attack', 'kill'];
@@ -69,7 +71,11 @@ export const ACTIONS: Record<ActionId, ActionDef> = {
   scavenge: { label: '遺品を持ち出す', place: 'plaza' },
   // 天の声を知っている人だけ：祈る・説く
   pray: { label: '祈る', place: 'home' },
-  preach: { label: '天の声を説く', place: 'plaza' },
+  preach: { label: '教えを説く', place: 'plaza' },
+  // 信じる教えの祠を広場に建てる（木材が要る）
+  build_shrine: { label: '祠を建てる', place: 'plaza' },
+  // 亡くなった人のお墓に参る（場所は、そのお墓）
+  mourn: { label: 'お墓参り', place: 'plaza' },
   // 村の入り口で見張る（盗賊が来たときに追い払う）
   guard: { label: '見張り', place: 'gate' },
   // 広場に来た行商人と取引する（村の外とお金をやりとりする）
@@ -101,6 +107,9 @@ export interface PlanBlock {
   action: ActionId;
   /** sell のときの値段 */
   prices?: Partial<Record<ItemId, number>>;
+  /** 説く教えの名前（preach）・お供えするお金（pray） */
+  faith?: string;
+  offer?: number;
   /** 行商人に売るもの・買うもの */
   sellItems?: ItemId[];
   buyItems?: ItemId[];

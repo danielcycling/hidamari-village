@@ -88,13 +88,25 @@ export class SocietyTab {
   }
 
   private organizations(): HTMLElement {
-    const s = this.section(`組織（${this.sim.organizations.length}）`);
-    if (this.sim.organizations.length === 0) {
+    const orgs = this.sim.organizations.filter((o) => o.kind !== 'faith');
+    const faiths = this.sim.organizations.filter((o) => o.kind === 'faith');
+    const s = this.section(`組織（${orgs.length}）・教え（${faiths.length}）`);
+    for (const f of faiths) {
+      const name = (id: string) => this.sim.get(id)?.profile.name ?? '?';
+      s.append(
+        el(
+          'p',
+          'assembly-line',
+          `🕯 「${f.name}」${f.foundedDay}日目〜：${(f.tenets ?? []).join('／')}／信じる人 ${f.memberIds.map(name).join('、')}${f.shrine ? '／祠あり' : ''}／蓄え${f.treasury}G`,
+        ),
+      );
+    }
+    if (orgs.length === 0) {
       s.append(el('p', 'mind-empty', 'まだ組織はない。村人が会話で作れば生まれる。'));
       return s;
     }
     const list = el('ul', 'ties');
-    for (const o of this.sim.organizations) {
+    for (const o of orgs) {
       const name = (id: string) => this.sim.get(id)?.profile.name ?? '?';
       const members = o.memberIds.map((id) => (id === o.leaderId ? `${name(id)}（代表）` : name(id))).join('、');
       list.append(

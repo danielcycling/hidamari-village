@@ -129,6 +129,9 @@ const RAID_HOUR = 20;
 const RAID_TAKE = 0.3;
 /** 盗賊を追い払った見張りに、村の人が寄せる好感度 */
 const GUARD_RESPECT = 8;
+/** 祠に要る木材・教えに残る言葉の数 */
+const SHRINE_WOOD = 5;
+const MAX_TENETS = 4;
 /** 覚えておく祈りの数 */
 const MAX_PRAYERS = 30;
 /** 人づてに伝わるときに、話が変わる確率（また聞きのとき・自分で見たとき） */
@@ -397,6 +400,10 @@ export interface Organization {
   dues: number;
   treasury: number;
   foundedDay: number;
+  /** 教え（信仰の集まり）なら 'faith'。教えの中身と、祠があるか */
+  kind?: 'faith';
+  tenets?: string[];
+  shrine?: boolean;
 }
 
 /** 誰かが誰かにした非行・暴力の記録。誰が知っているかも持つ（秘密はここから生まれる） */
@@ -1090,6 +1097,7 @@ export class Simulation {
       cause,
     };
     this.graves.push(grave);
+    this.registerGrave(grave, home.spot);
     // 残したものは家に置かれたまま（誰のものでもなくなる）
     this.estates[home.id] = { ownerName: r.profile.name, money: r.money, inventory: r.inventory, day: this.clock.day };
     home.name = '空き家';
@@ -1616,6 +1624,8 @@ export class Simulation {
     if ((t.ate.meal ?? 0) > 0) notes.push({ text: '定食を味わえた', delta: 5 });
     if ((t.drank ?? 0) > 0) notes.push({ text: 'お酒を飲んでくつろいだ', delta: 0 });
     if (countItem(r.inventory, 'ornament') > 0) notes.push({ text: '飾りを眺めると心がなごむ', delta: 4 });
+    const faith = this.faithOf(r);
+    if (faith?.shrine) notes.push({ text: `「${faith.name}」の祠に手を合わせると心が落ち着く`, delta: 3 });
     if ((t.talks ?? 0) === 0) notes.push({ text: '誰ともちゃんと話していない', delta: -8 });
     else if ((t.talks ?? 0) >= 3) notes.push({ text: '人とたくさん話した', delta: 4 });
     // 家は誰からも見えるので、比べてしまう
@@ -1748,6 +1758,16 @@ export class Simulation {
       }
       action = 'wander';
     }
+    if (action === 'build_shrine') {
+      const done = r.visited && r.visited.targetId === action && now < r.visited.until;
+      if (done || !this.faithOf(r) || this.faithOf(r)!.shrine) action = 'wander';
+    }
+    if (action === 'mourn') {
+      const grave = this.graves.find((g) => g.name === target);
+      const done = r.visited && r.visited.targetId === `grave:${target}` && now < r.visited.until;
+      if (grave && !done) return { placeId: `grave:${grave.name}`, action, label: `${grave.name}のお墓参り`, block, target, purpose };
+      action = 'wander';
+    }
     if (action === 'peddler') {
       const done = r.visited && r.visited.targetId === 'peddler' && now < r.visited.until;
       if (!this.peddler.visit || done) action = this.peddler.visit ? 'wander' : 'sell';
@@ -1833,6 +1853,12 @@ export class Simulation {
         break;
       case 'peddler':
         this.tradeWithPeddler(r, task);
+        break;
+      case 'build_shrine':
+        this.buildShrine(r, task);
+        break;
+      case 'mourn':
+        this.mourn(r, task);
         break;
       case 'pray':
         this.pray(r, task);
@@ -2235,27 +2261,109 @@ export class Simulation {
     this.remember(r, `${est.ownerName}の空き家から遺品（${what}）を持ち出した。${seen.length ? `${seen.join('、')}に見られた` : '誰にも見られなかったと思う'}`);
   }
 
-  /** 祈る：天の声の主（観察者）に届く */
+  /** お墓を、歩いて行ける場所として登録する（お墓参りのため。家の戸口の前に立って手を合わせる） */
+  registerGrave(grave: Grave, spot?: Point): void {
+    const id = `grave:${grave.name}`;
+    if (this.map.places[id]) return;
+    const at = spot ?? { x: grave.at.x + 1, y: grave.at.y };
+    this.map.places[id] = { id, name: `${grave.name}のお墓`, kind: 'public', spot: at };
+  }
+
+  /** その人が信じている教え（なければ undefined） */
+  faithOf(r: Resident): Organization | undefined {
+    return this.organizations.find((o) => o.kind === 'faith' && o.memberIds.includes(r.profile.id));
+  }
+
+  /** 祈る。お供えがあれば、信じる教えの蓄えになる。祈りは神の力タブにも届く（見るだけで、応えなくてよい） */
   private pray(r: Resident, task: Task) {
     if (!task.purpose) return;
     r.visited = { targetId: 'pray', until: this.taskEnd(r, task) };
+    const faith = this.faithOf(r);
+    const offer = Math.max(0, Math.min(r.money, Math.round(task.block?.offer ?? 0)));
+    let given = '';
+    if (offer > 0 && faith) {
+      r.money -= offer;
+      r.today.spent += offer;
+      faith.treasury += offer;
+      given = `（「${faith.name}」に${offer}Gをお供えした）`;
+    }
     this.prayers.push({ day: this.clock.day, time: this.clock.formatTime(), residentId: r.profile.id, name: r.profile.name, text: task.purpose });
     if (this.prayers.length > MAX_PRAYERS) this.prayers.shift();
-    this.remember(r, `天に祈った「${task.purpose}」`);
-    this.log(`${r.profile.name}が祈った「${task.purpose}」`, 'prayer', { speakerId: r.profile.id });
+    this.remember(r, `祈った「${task.purpose}」${given}`);
+    this.log(`${r.profile.name}が祈った「${task.purpose}」${given}`, 'prayer', { speakerId: r.profile.id });
   }
 
-  /** 広場で天の声のことを説く。聞いた人は信じるかもしれないし、笑うかもしれない */
+  /**
+   * 広場で教えを説く。初めて説く人は、その言葉から新しい教えを起こす（名前は本人がつける）。
+   * 教えを信じている人が説けば、その教えに言葉が加わる。聞いた人は信じるかもしれないし、笑うかもしれない
+   */
   private preach(r: Resident, task: Task) {
     if (!task.purpose) return;
     r.visited = { targetId: 'preach', until: this.taskEnd(r, task) };
-    const text = `${r.profile.name}が広場で天の声のことを説いている「${task.purpose}」`;
+    let faith = this.faithOf(r);
+    if (!faith) {
+      const name = (task.block?.faith ?? '').trim() || `${r.profile.name}の教え`;
+      const same = this.organizations.find((o) => o.name === name);
+      if (same && same.kind === 'faith') {
+        same.memberIds.push(r.profile.id);
+        faith = same;
+      } else {
+        faith = {
+          id: ++this.orgSeq,
+          name: same ? `${name}（${r.profile.name}）` : name,
+          purpose: task.purpose,
+          leaderId: r.profile.id,
+          memberIds: [r.profile.id],
+          dues: 0,
+          treasury: 0,
+          foundedDay: this.clock.day,
+          kind: 'faith',
+          tenets: [],
+        };
+        this.organizations.push(faith);
+        this.announce(`${r.profile.name}が「${faith.name}」を説きはじめた`, 'life');
+      }
+    }
+    const tenets = (faith.tenets ??= []);
+    if (!tenets.includes(task.purpose)) {
+      tenets.push(task.purpose);
+      if (tenets.length > MAX_TENETS) tenets.shift();
+    }
+    const text = `${r.profile.name}が広場で「${faith.name}」を説いている「${task.purpose}」`;
     this.announce(text, 'life');
     for (const o of this.residents) {
       if (o === r) continue;
       o.faith = { heard: o.faith?.heard ?? 0, sermons: (o.faith?.sermons ?? 0) + 1 };
       this.remember(o, text);
     }
+  }
+
+  /** 信じる教えの祠を、広場に建てる（木材を使う） */
+  private buildShrine(r: Resident, task: Task) {
+    r.visited = { targetId: 'build_shrine', until: this.taskEnd(r, task) };
+    const faith = this.faithOf(r);
+    if (!faith || faith.shrine) return;
+    if (countItem(r.inventory, 'wood') < SHRINE_WOOD) {
+      this.remember(r, `「${faith.name}」の祠を建てようとしたが、木材が${SHRINE_WOOD}本なかった`);
+      return;
+    }
+    takeItem(r.inventory, 'wood', SHRINE_WOOD);
+    faith.shrine = true;
+    this.announce(`${r.profile.name}が広場に「${faith.name}」の祠を建てた`, 'life');
+    for (const id of faith.memberIds) {
+      const m = this.get(id);
+      if (m && m !== r) this.feel(m, r, 10, `${this.clock.day}日目、「${faith.name}」の祠を建ててくれた`);
+    }
+  }
+
+  /** 亡くなった人のお墓に参る */
+  private mourn(r: Resident, task: Task) {
+    const grave = this.graves.find((g) => g.name === task.target);
+    r.visited = { targetId: `grave:${task.target}`, until: this.taskEnd(r, task) };
+    if (!grave) return;
+    this.remember(r, `${grave.name}のお墓に手を合わせた${task.purpose ? `（${task.purpose}）` : ''}`);
+    r.satisfaction = Math.min(100, (r.satisfaction ?? 50) + 3);
+    this.log(`${r.profile.name}が${grave.name}のお墓に手を合わせた`, 'life');
   }
 
   /**
@@ -3229,6 +3337,11 @@ export class Simulation {
         const org = this.organizations.find((o) => o.name === (ag.org ?? '').trim() && o.memberIds.includes(to.profile.id));
         if (!org || org.memberIds.includes(from.profile.id)) return;
         org.memberIds.push(from.profile.id);
+        if (org.kind === 'faith') {
+          this.announce(`${A}が「${org.name}」を信じるようになった`, 'life');
+          this.remember(from, `${B}に導かれて「${org.name}」を信じるようになった（${(org.tenets ?? []).join('／')}）`);
+          return;
+        }
         this.announce(`${A}が「${org.name}」に入った`, 'life');
         this.remember(from, `${B}の誘いで「${org.name}」に入った（${org.purpose}）`);
         return;

@@ -63,6 +63,7 @@ export class Renderer {
     const festival = sim.activeGathering();
     if (festival) this.drawLanterns(festival.placeId, now);
     if (sim.peddler.visit) this.drawPeddler();
+    sim.organizations.filter((o) => o.kind === 'faith' && o.shrine).forEach((o, i) => this.drawShrine(i, o.name));
     if (sim.weather.kind === 'rain' || sim.weather.kind === 'storm') this.drawRain(now, sim.weather.kind === 'storm');
     else if (sim.weather.kind === 'cloudy') this.drawClouds();
     this.drawLighting(sim, hour);
@@ -239,6 +240,26 @@ export class Renderer {
     ctx.fillStyle = '#6f7480';
     ctx.fillRect(x + 3, y + 3, 2, 5);
     ctx.fillRect(x + 2, y + 4, 4, 1);
+  }
+
+  /** 教えの祠（広場の左上から並べる） */
+  private drawShrine(index: number, name: string) {
+    const { ctx, map } = this;
+    const area = map.places.plaza.area;
+    if (!area) return;
+    const x = (area.x + index * 2) * TILE + 2;
+    const y = area.y * TILE + 2;
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.fillRect(x + 1, y + 13, 12, 2);
+    ctx.fillStyle = '#c0504d';
+    ctx.fillRect(x, y + 2, 14, 2);
+    ctx.fillRect(x + 2, y + 4, 2, 10);
+    ctx.fillRect(x + 10, y + 4, 2, 10);
+    ctx.fillStyle = '#8a3330';
+    ctx.fillRect(x + 1, y + 6, 12, 1);
+    ctx.fillStyle = '#e8c35a';
+    ctx.fillRect(x + 6, y + 9, 2, 3);
+    label(ctx, name.slice(0, 6), x + 7, y - 1, 4.5, '#fff8e6');
   }
 
   /** 広場の行商人の荷車 */

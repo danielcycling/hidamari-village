@@ -94,13 +94,15 @@ function actionCatalog(sim: Simulation, r: Resident): string {
     kill: '相手を殺し、相手の持ち物とお金をすべて自分のものにする。target に相手の名前。自分の体力が相手より多いほど、相手が弱っているほど成功しやすい。失敗すると相手は傷を負って逃げる。その場に誰もいなければ、誰がやったかは分からない',
     accuse: '広場で、ある人のことを村のみんなに言いふらす（本当のことでも嘘でもよい）。target に相手の名前、purpose に言いふらす中身',
     scavenge: `亡くなった人・出ていった人の空き家から、残された物とお金を持ち出す。target にその人の名前。誰の物でもないが、見られれば盗みと思われるかもしれない。${estateLine(sim)}`,
-    pray: '家で天に祈る。purpose に祈りの言葉を書く。天の声の主に届くかもしれない（天の声を聞いたことがある人・説かれたことがある人だけ）',
-    preach: '広場で、天の声のことを村のみんなに説く。purpose に説く中身を書く。信じる人も、笑う人もいる（天の声を聞いたことがある人だけ）',
+    pray: `家で祈る。何に祈るかは自分しだい。purpose に祈りの言葉を書く。信じる教えがあれば offer にお供えのお金を書ける（教えの蓄えになる）`,
+    preach: `広場で、自分の信じることを村のみんなに説く。purpose に説く中身、faith_name に教えの名前を書く（初めて説くなら、それが新しい教えになる）。信じる人も、笑う人もいる`,
+    build_shrine: `信じる教えの祠を広場に建てる（木材${5}本）。祠があると、信じる人は手を合わせて心が落ち着く`,
+    mourn: `亡くなった人のお墓に参る。target に亡くなった人の名前。${sim.graves.length ? `お墓：${sim.graves.map((g) => g.name).join('、')}` : '今はお墓はない'}`,
     peddler: `広場に来た行商人と取引する（村の外とのお金のやりとり）。sell_items に売る品、buy_items に買う品を書く（食べ物は自分の食べる分を残して売る）。${peddlerLine(sim)}`,
     guard: `村の入り口で見張る。盗賊が来たとき、見張りが多く元気なほど追い払える（ひとりでは難しい）。追い払えば村の人から一目置かれるが、けがをすることもある。追い払えなければ、村じゅうの人の持ち物（食べ物・木材など）が3割奪われる。${raidLine(sim)}`,
     call_assembly: `村のみんなに呼びかけ、その日の夕方に集会所で集会を開く。purpose に議題（例：誰かを村から追放する、誰かに罰金を科す、村の決まりを作る・やめる、村のことを話し合う）、相手がいれば target。結論は出席者の多数決で決まり、決まったことは実行される${sim.assemblies.some((a) => a.status !== 'done') ? '（今は別の集会が予定されている）' : ''}`,
   };
-  return PLAN_ACTIONS.filter((a) => (a !== 'pray' && a !== 'preach') || knowsHeaven(r) && (a === 'pray' || (r.faith?.heard ?? 0) > 0)).map((a) => {
+  return PLAN_ACTIONS.map((a) => {
     const place = ACTIONS[a].place === 'home' ? '自分の家' : ACTIONS[a].place;
     return `- ${a}（${ACTIONS[a].label}、場所:${placeLabel(place)}）: ${lines[a]}${can[a] ?? ''}`;
   }).join('\n');
@@ -250,10 +252,6 @@ function estateLine(sim: Simulation): string {
     : '今は遺品の残っていそうな空き家はない';
 }
 
-/** 天の声に触れたことがあるか（祈る・説くは、それを知っている人だけ） */
-export function knowsHeaven(r: Resident): boolean {
-  return (r.faith?.heard ?? 0) > 0 || (r.faith?.sermons ?? 0) > 0;
-}
 
 /** 盗み・強奪で狙えそうな相手（最後に会ったとき、たくさん持っていた人）。見たことしか分からない */
 function loot(sim: Simulation, r: Resident): string {
@@ -443,19 +441,32 @@ function buildHint(r: Resident): string {
 
 /** 入っている組織 */
 function orgSection(sim: Simulation, r: Resident): string[] {
-  const mine = sim.orgsOf(r).map((o) => {
+  const myFaith = sim.faithOf(r);
+  const faiths = sim.organizations.filter((o) => o.kind === 'faith');
+  const faithLines = [
+    '',
+    '信じている教え:',
+    myFaith
+      ? `- 「${myFaith.name}」${myFaith.leaderId === r.profile.id ? '（自分が説きはじめた）' : ''}：${(myFaith.tenets ?? []).join('／')}。信じる人 ${myFaith.memberIds.map((id) => sim.get(id)?.profile.name).filter(Boolean).join('、')}${myFaith.shrine ? '、祠あり' : ''}、蓄え${myFaith.treasury}G`
+      : '- なし（何かを信じるかどうか、何を信じるかは自分しだい）',
+    ...faiths
+      .filter((o) => o !== myFaith)
+      .map((o) => `- 村にある教え「${o.name}」（説く人 ${sim.get(o.leaderId)?.profile.name ?? '?'}、${o.memberIds.length}人）：${(o.tenets ?? []).slice(-2).join('／')}`),
+  ];
+  const mine = sim.orgsOf(r).filter((o) => o.kind !== 'faith').map((o) => {
     const role = o.leaderId === r.profile.id ? '代表' : 'メンバー';
     const others = o.memberIds.filter((id) => id !== r.profile.id).map((id) => sim.get(id)?.profile.name).filter(Boolean);
     return `- 「${o.name}」の${role}：目的「${o.purpose}」、仲間 ${others.join('、') || 'なし'}、会費1日${o.dues}G、金庫${o.treasury}G`;
   });
   const all = sim.organizations
-    .filter((o) => !o.memberIds.includes(r.profile.id))
+    .filter((o) => o.kind !== 'faith' && !o.memberIds.includes(r.profile.id))
     .map((o) => `- 「${o.name}」（代表 ${sim.get(o.leaderId)?.profile.name ?? '?'}、${o.memberIds.length}人）：${o.purpose}`);
   return [
     '',
     '入っている組織:',
     ...(mine.length ? mine : ['- なし（会話で、ほかの人と組織を作ったり、入れてもらったりできる）']),
     ...(all.length ? ['村にあるほかの組織:', ...all] : []),
+    ...faithLines,
   ];
 }
 
@@ -501,6 +512,8 @@ export interface RawPlan {
     purpose?: string;
     sell_items?: string[];
     buy_items?: string[];
+    faith_name?: string;
+    offer?: number;
   }[];
 }
 
@@ -603,6 +616,8 @@ export function planSchema(): object {
             prices: { type: 'object', properties: priceProps },
             target: { type: 'string' },
             purpose: { type: 'string' },
+            faith_name: { type: 'string' },
+            offer: { type: 'integer', minimum: 0, maximum: 500 },
             sell_items: { type: 'array', items: { type: 'string', enum: ITEM_IDS } },
             buy_items: { type: 'array', items: { type: 'string', enum: PEDDLER_GOODS } },
           },
@@ -634,10 +649,16 @@ export function parsePlan(raw: RawPlan, day: number, current: Resident, sim: Sim
         b.action === 'scavenge'
           ? Object.entries(sim.estates).find(([, e]) => e.ownerName === String(b.target ?? '').trim())?.[0]
           : undefined;
-      const target = b.action === 'scavenge' ? estateHome : targeted ? byName.get(String(b.target ?? '').trim()) : undefined;
+      const target =
+        b.action === 'scavenge'
+          ? estateHome
+          : b.action === 'mourn'
+            ? String(b.target ?? '').trim()
+            : targeted
+              ? byName.get(String(b.target ?? '').trim())
+              : undefined;
       const wordy = b.action === 'accuse' || b.action === 'call_assembly' || b.action === 'pray' || b.action === 'preach';
-      const allowed =
-        (b.action !== 'pray' || knowsHeaven(current)) && (b.action !== 'preach' || (current.faith?.heard ?? 0) > 0);
+      const allowed = b.action !== 'mourn' || sim.graves.some((g) => g.name === String(b.target ?? '').trim());
       const missing = !allowed
         ? true
         : wordy
@@ -662,7 +683,9 @@ export function parsePlan(raw: RawPlan, day: number, current: Resident, sim: Sim
               buyItems: (b.buy_items ?? []).filter((x): x is ItemId => PEDDLER_GOODS.includes(x as ItemId)),
             }
           : {}),
-        ...(TARGETED_ACTIONS.includes(action) || ['accuse', 'call_assembly', 'scavenge', 'pray', 'preach'].includes(action)
+        ...(action === 'preach' && clean(b.faith_name, 16) ? { faith: clean(b.faith_name, 16) } : {}),
+        ...(action === 'pray' && Number(b.offer) > 0 ? { offer: Math.round(Number(b.offer)) } : {}),
+        ...(TARGETED_ACTIONS.includes(action) || ['accuse', 'call_assembly', 'scavenge', 'pray', 'preach', 'mourn'].includes(action)
           ? { target: target === current.profile.id ? undefined : target, purpose: hasForeignWords(purpose) ? '' : purpose }
           : {}),
       };
@@ -774,7 +797,7 @@ const SELF_SYSTEM = `あなたは小さな村に暮らす村人本人です。�
   - 生き延びること以外でもよい。豊かになりたい、認められたい、誰かに勝ちたい、見返したい、あの人のようになりたい、楽をしたい、など。
   - きれいごとでなくてよい。欲・見栄・嫉妬・仕返しの気持ちがあれば、そのまま書く。
   - 経験や人間関係から自然に出てくるものにする。前の望みが続いていればそのままでも、変わってもよい。
-- 天の声を聞いたことや、誰かが天の声のことを説くのを聞いたことがあれば、それをどう受け止めているか（信じる・疑う・恐れる・利用する）を自己像に入れてもよい。
+- 何かを信じている（教え・祈り・天の声・亡くなった人への思い など）なら、それをどう受け止めているか（信じる・疑う・恐れる・利用する）を自己像に入れてもよい。
 - 出力はJSONのみ。`;
 
 export function buildSelfImageMessages(sim: Simulation, r: Resident): ChatMessage[] {
