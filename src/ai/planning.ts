@@ -232,9 +232,9 @@ function ties(sim: Simulation, r: Resident): string[] {
 /** 行商人の知らせ（村じゅうが見聞きしている） */
 function peddlerLine(sim: Simulation): string {
   const goods = '保存食（腐らない食べ物）・薬（弱ったとき体力が戻る）・道具（持っていると仕事が1.15倍はかどる）・飾り（毎日の満足が上がる）';
-  if (sim.peddler.visit) return `今日は行商人が来ている。${sim.peddlerOffer()}。売り物の中身：${goods}`;
+  if (sim.peddler.visit) return `今日は行商人が来ている。${sim.peddlerOffer()}。売り物の中身：${goods}。行商人は市場の店も見て回り、買い取り値より安い品があれば買っていく`;
   const when = sim.peddler.nextDay === sim.clock.day + 1 ? '明日' : `${sim.peddler.nextDay}日目ごろ`;
-  return `次に行商人が来るのは${when}（9〜17時、広場）。村の品を買い取ってくれ、村にない品を売っている：${goods}`;
+  return `次に行商人が来るのは${when}（9〜17時、広場）。村の品を買い取ってくれ（市場で店を出していれば、店も見て回って買っていく）、村にない品を売っている：${goods}`;
 }
 
 /** 盗賊の知らせ（村じゅうが見聞きしている） */

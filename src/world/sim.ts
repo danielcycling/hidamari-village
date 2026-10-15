@@ -1163,6 +1163,7 @@ export class Simulation {
     if (h >= RAID_HOUR && h < RAID_HOUR + 1 && this.raid?.day === this.clock.day) this.resolveRaid();
     if (h >= PEDDLER_FROM && h < PEDDLER_TO && !this.peddler.visit && this.peddler.nextDay === this.clock.day) this.peddlerArrives();
     if (h >= PEDDLER_TO && this.peddler.visit) this.peddlerLeaves();
+    if (this.peddler.visit) this.peddlerBrowses();
     if (h >= IMMIGRATION_HOUR && h < IMMIGRATION_HOUR + 1) this.tryImmigration();
     if (h >= PLANNING_HOUR && this.lastEveningDay !== this.clock.day) {
       this.lastEveningDay = this.clock.day;
@@ -2069,6 +2070,20 @@ export class Simulation {
           if (!best || value > best.value) best = { seller, item, price, value };
         }
       }
+      // 行商人が来ていれば、保存食も並んでいる
+      const peddlerPrice = PEDDLER_SELL.preserved ?? 0;
+      const peddlerHere = this.peddler.visit && buyer.placeId === 'plaza' && peddlerPrice > 0;
+      const peddlerValue = peddlerHere ? ITEMS.preserved.satiety / peddlerPrice : 0;
+      const peddlerOk = peddlerHere && peddlerPrice <= buyer.money && peddlerPrice <= willingToPay(buyer, 'preserved');
+      if (peddlerOk && (!best || peddlerValue > best.value)) {
+        buyer.money -= peddlerPrice;
+        buyer.today.spent += peddlerPrice;
+        this.moneyFlow.out += peddlerPrice;
+        addItem(buyer.inventory, 'preserved', 1, this.clock.minutes, null);
+        addCount(buyer.today.bought, 'preserved', 1);
+        this.log(`${buyer.profile.name}が行商人から保存食を${peddlerPrice}Gで買った`, 'trade');
+        continue;
+      }
       if (!best) break;
       record(best.seller, best.item, best.price);
     }
@@ -2663,6 +2678,42 @@ export class Simulation {
     this.peddler.visit = null;
     this.peddler.nextDay = this.clock.day + PEDDLER_INTERVAL[0] + Math.floor(this.rng() * (PEDDLER_INTERVAL[1] - PEDDLER_INTERVAL[0] + 1));
     if (v) this.log(`行商人は村を去った（次は${this.peddler.nextDay}日目ごろ）`, 'system');
+  }
+
+  /**
+   * 行商人は市場の店を見て回り、自分の買い取り値より安く並んでいる品を買っていく（村の外からお金が入る）。
+   * 村人は、いつもどおり市場で売っているだけで、外にも売れる
+   */
+  private peddlerBrowses() {
+    const v = this.peddler.visit;
+    if (!v) return;
+    for (const seller of this.residents) {
+      if (!seller.shop || seller.placeId !== 'plaza') continue;
+      const bought: string[] = [];
+      let paid = 0;
+      for (const id of ITEM_IDS) {
+        if (!v.buyPrices[id]) continue;
+        const asking = seller.shop.prices[id] ?? ITEMS[id].fallbackPrice;
+        let n = this.sellable(seller, id);
+        let count = 0;
+        while (n > 0 && asking <= this.peddlerBuyPrice(id) && v.budget >= asking) {
+          takeItem(seller.inventory, id, 1);
+          seller.money += asking;
+          seller.today.earned += asking;
+          addCount(seller.today.sold, id, 1);
+          v.budget -= asking;
+          v.bought[id] = (v.bought[id] ?? 0) + 1;
+          this.moneyFlow.in += asking;
+          paid += asking;
+          count++;
+          n--;
+        }
+        if (count) bought.push(`${ITEMS[id].name}${count}個`);
+      }
+      if (!bought.length) continue;
+      this.log(`行商人が${seller.profile.name}の店から${bought.join('・')}を${paid}Gで買っていった`, 'trade');
+      this.remember(seller, `市場の店で、行商人が${bought.join('・')}を${paid}Gで買っていった`);
+    }
   }
 
   /** 行商人の買い取り値と売り物（村じゅうが見聞きできる） */
