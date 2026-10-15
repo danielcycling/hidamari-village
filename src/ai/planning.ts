@@ -730,6 +730,9 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n
  * 小麦がないのにパンは焼けないので畑へ、雇われていないのに雇われ仕事はできないので自分の仕事へ、など。
  * 人に会う・休むといった本人の選択には手をつけない。
  */
+/** 一度すれば済む行動 */
+const ONE_SHOT: ActionId[] = ['pray', 'preach', 'mourn', 'build_shrine', 'accuse', 'call_assembly'];
+
 function makeFeasible(blocks: PlanBlock[], r: Resident, sim: Simulation): PlanBlock[] {
   const f = (s: keyof typeof SKILLS) => skillFactor(r.skills[s]);
   // 得意なほう（同じなら畑）
@@ -743,7 +746,16 @@ function makeFeasible(blocks: PlanBlock[], r: Resident, sim: Simulation): PlanBl
   const sellable = ITEM_IDS.some((id) => sim.sellable(r, id) > 0);
   let produced = false;
   const employed = !!sim.employmentOf(r);
-  return blocks.map((b) => {
+  // 一度すれば済むこと（祈る・説く・お墓参り など）は長くても1時間。残りの時間はふだんの仕事にあてる
+  const split = blocks.flatMap((b): PlanBlock[] =>
+    ONE_SHOT.includes(b.action) && b.to - b.from > 1.5
+      ? [
+          { ...b, to: b.from + 1 },
+          { from: b.from + 1, to: b.to, action: own },
+        ]
+      : [b],
+  );
+  return split.map((b) => {
     const h = b.to - b.from;
     let action = b.action;
     if (action === 'work_for' && !employed) action = own;
