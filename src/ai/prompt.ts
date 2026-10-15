@@ -42,6 +42,8 @@ export interface RawAgreement {
   text?: string;
   /** 組織の名前 */
   org?: string;
+  /** 売り渡す区画（畑・釣り場・食堂・パン焼き小屋） */
+  land?: string;
   /** 根拠になったセリフ（そのまま抜き出す） */
   quote?: string;
 }
@@ -60,6 +62,7 @@ export const AGREEMENT_TYPES = [
   'join_org',
   'leave_org',
   'org_pay',
+  'sell_land',
 ] as const;
 
 // ───────────── 隠していること・知っていること ─────────────
@@ -333,7 +336,7 @@ export function buildAgreementMessages(
     '',
     `まとめ: ${summary}`,
     '',
-    `agreements の書き方: type は ${AGREEMENT_TYPES.join('/')}。trade は from=売る人・to=買う人・item・qty・money=代金の合計。gift は from=あげる人・to=もらう人・item と qty、または money。loan は from=貸す人・to=借りる人・money・days=返すまでの日数。repay は from=返す人・to=貸した人・money。hush は from=黙っていてほしい人・to=黙ると約束した人・口止め料があれば item・qty・money。found_org は from=作ろうと言い出した人（代表になる）・to=一緒に作る人・org=組織の名前・text=目的・money=1日の会費（なければ0）。join_org は from=入る人・to=誘ったメンバー・org=組織の名前。leave_org は from=抜ける人・to=告げた相手・org=組織の名前。org_pay は from=組織の代表・to=受け取る人・org=組織の名前・money=金庫から渡す額・text=何のためか。hire は from=雇う人・to=雇われる人・work=仕事（${WORK_ACTIONS.map((w) => `${w}=${ACTIONS[w].label}`).join('、')}）・money=日給・days=日数。quit は from=辞める人・to=雇い主。teach は from=教える人・to=教わる人・work=教える仕事・money=教わる代金（その場で教える。教わる人は必ず代金を払う。教える人のほうが上手でないと効果はない）。promise は from=約束する人・to=相手・text=約束の中身。品物の item は ${ITEM_IDS.map((id) => `${id}=${ITEMS[id].name}`).join('、')}。`,
+    `agreements の書き方: type は ${AGREEMENT_TYPES.join('/')}。trade は from=売る人・to=買う人・item・qty・money=代金の合計。gift は from=あげる人・to=もらう人・item と qty、または money。loan は from=貸す人・to=借りる人・money・days=返すまでの日数。repay は from=返す人・to=貸した人・money。hush は from=黙っていてほしい人・to=黙ると約束した人・口止め料があれば item・qty・money。found_org は from=作ろうと言い出した人（代表になる）・to=一緒に作る人・org=組織の名前・text=目的・money=1日の会費（なければ0）。join_org は from=入る人・to=誘ったメンバー・org=組織の名前。leave_org は from=抜ける人・to=告げた相手・org=組織の名前。org_pay は from=組織の代表・to=受け取る人・org=組織の名前・money=金庫から渡す額・text=何のためか。sell_land は from=区画を売る人・to=買う人・land=どこの区画か（畑・釣り場・食堂・パン焼き小屋）・money=代金。hire は from=雇う人・to=雇われる人・work=仕事（${WORK_ACTIONS.map((w) => `${w}=${ACTIONS[w].label}`).join('、')}）・money=日給・days=日数。quit は from=辞める人・to=雇い主。teach は from=教える人・to=教わる人・work=教える仕事・money=教わる代金（その場で教える。教わる人は必ず代金を払う。教える人のほうが上手でないと効果はない）。promise は from=約束する人・to=相手・text=約束の中身。品物の item は ${ITEM_IDS.map((id) => `${id}=${ITEMS[id].name}`).join('、')}。`,
   ].join('\n');
   return [
     { role: 'system', content: AGREEMENT_SYSTEM },
@@ -362,6 +365,7 @@ export function buildAgreementSchema(ctx: ConversationContext): object {
             work: { type: 'string', enum: [...WORK_ACTIONS, ''] },
             text: { type: 'string' },
             org: { type: 'string' },
+            land: { type: 'string', enum: ['畑', '釣り場', '食堂', 'パン焼き小屋', ''] },
             quote: { type: 'string' },
           },
           required: ['type', 'quote', 'from', 'to'],

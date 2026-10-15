@@ -41,7 +41,9 @@ import {
   ITEM_IDS,
   ITEMS,
   NEWCOMER_FOOD,
+  DEFAULT_FEE,
   MEDICINE_HEAL,
+  PLOTS,
   NEWCOMER_MONEY,
   PEDDLER_BUDGET,
   PEDDLER_BUY,
@@ -291,6 +293,8 @@ export interface Resident {
   visited?: { targetId: string; until: number };
   /** 危機の判断をLLMに頼んだ時刻 */
   crisisRequestedAt?: number;
+  /** 今いる設備で使っている区画（自分の・誰のものでもない・借りている） */
+  slot?: { placeId: string; kind: 'own' | 'common' | 'rent'; plotId?: string };
   /** 天の声を聞いた回数・天の声のことを説かれた回数（信仰の芽） */
   faith?: { heard: number; sermons: number };
   /** 悪魔のささやき（心の奥の声）と、それが消える時刻 */
@@ -373,7 +377,17 @@ export type AgreementType =
   | 'found_org'
   | 'join_org'
   | 'leave_org'
-  | 'org_pay';
+  | 'org_pay'
+  | 'sell_land';
+
+/** 設備の区画。持ち主がいなければ誰でもただで使え、持ち主がいれば持ち主が使うか、使用料で貸す */
+export interface Plot {
+  id: string;
+  placeId: string;
+  ownerId: string | null;
+  /** ほかの人が使うときの1時間あたりの使用料 */
+  fee: number;
+}
 
 /** 行商人。数日おきに来て、広場で村の品を買い取り、村にない品を売る */
 export interface Peddler {
@@ -467,6 +481,8 @@ export interface Agreement {
   text?: string;
   /** 組織の名前（作る・入る・抜ける・金庫から払う） */
   org?: string;
+  /** 売り渡す区画のある設備（sell_land） */
+  land?: string;
 }
 
 export interface Grave {
@@ -615,7 +631,7 @@ export interface Assembly {
   result?: AssemblyResult;
 }
 
-export type ProposalKind = 'exile' | 'fine' | 'rule' | 'repeal' | 'estate' | 'none';
+export type ProposalKind = 'exile' | 'fine' | 'rule' | 'repeal' | 'estate' | 'grant' | 'none';
 
 export interface AssemblyResult {
   speeches: { speakerId: string; text: string }[];
@@ -711,6 +727,12 @@ export class Simulation {
   /** 村人が作った組織 */
   readonly organizations: Organization[] = [];
   orgSeq = 0;
+  /** 設備の区画 */
+  readonly plots: Plot[] = [];
+  /** 村の金庫（区画の代金などが入る。使い道は集会で決める） */
+  villageTreasury = 0;
+  /** 今日、区画の使用料をやりとりした記録（夜に記憶にする） */
+  private rentToday = new Map<string, { amount: number; from: Set<string> }>();
   /** 村の外とのお金の出入り（行商人・やってきた人・出ていった人）。村のお金の合計 ＝ 最初の額 ＋ in − out */
   readonly moneyFlow = { in: 0, out: 0 };
   /** 行商人：次に来る日と、来ているあいだの様子 */
@@ -754,6 +776,9 @@ export class Simulation {
     seed = 1,
   ) {
     this.rng = mulberry32(seed);
+    for (const [placeId, { count }] of Object.entries(PLOTS)) {
+      for (let i = 1; i <= count; i++) this.plots.push({ id: `${placeId}_${i}`, placeId, ownerId: null, fee: DEFAULT_FEE });
+    }
     this.weatherRng = mulberry32(seed ^ 0x5eed);
     for (const profile of profiles) {
       this.createResident(profile, {
@@ -783,7 +808,8 @@ export class Simulation {
     return (
       this.residents.reduce((n, r) => n + r.money, 0) +
       Object.values(this.estates).reduce((n, e) => n + e.money, 0) +
-      this.organizations.reduce((n, o) => n + o.treasury, 0)
+      this.organizations.reduce((n, o) => n + o.treasury, 0) +
+      this.villageTreasury
     );
   }
 
@@ -1085,6 +1111,7 @@ export class Simulation {
 
   private die(r: Resident, cause: string, announcement = `${r.profile.name}が${cause}で亡くなった`) {
     this.dropFromOrgs(r);
+    this.releasePlots(r);
     if (r.conversation) this.finishConversation(r.conversation);
     this.residents.splice(this.residents.indexOf(r), 1);
     const home = this.map.places[r.profile.homeId];
@@ -1109,6 +1136,7 @@ export class Simulation {
   /** 村の入り口に着いた、出ていく住民を村から消す */
   private departVillage(r: Resident) {
     this.dropFromOrgs(r);
+    this.releasePlots(r);
     if (r.conversation) this.finishConversation(r.conversation);
     this.residents.splice(this.residents.indexOf(r), 1);
     const home = this.map.places[r.profile.homeId];
@@ -1176,6 +1204,7 @@ export class Simulation {
   private endOfDay() {
     const day = this.clock.day - 1;
     this.collectDues();
+    this.settleRent();
     // 気持ちは、何もなければ少しずつ薄れていく
     for (const r of this.residents) {
       for (const rel of Object.values(r.relations)) rel.affinity = Math.round(rel.affinity * (1 - AFFINITY_FADE) * 10) / 10;
@@ -1759,6 +1788,10 @@ export class Simulation {
       }
       action = 'wander';
     }
+    if (action === 'buy_land') {
+      const done = r.visited && r.visited.targetId === action && now < r.visited.until;
+      if (done || !target || !this.plots.some((p) => p.placeId === target && !p.ownerId)) action = 'wander';
+    }
     if (action === 'build_shrine') {
       const done = r.visited && r.visited.targetId === action && now < r.visited.until;
       if (done || !this.faithOf(r) || this.faithOf(r)!.shrine) action = 'wander';
@@ -1809,7 +1842,7 @@ export class Simulation {
     }
     const def = ACTIONS[action];
     const placeId = def.place === 'home' ? home : def.place;
-    return { placeId, action, label: block ? def.label : '家でくつろぐ', block };
+    return { placeId, action, label: block ? def.label : '家でくつろぐ', block, target, purpose };
   }
 
   /** その場所で計画の行動をする */
@@ -1822,6 +1855,7 @@ export class Simulation {
       case 'cook':
       case 'chop':
       case 'brew':
+        if (!this.payRent(r, task, dt)) break;
         this.doWork(r, r, task.action, task, dt);
         break;
       case 'build':
@@ -1857,6 +1891,9 @@ export class Simulation {
         break;
       case 'build_shrine':
         this.buildShrine(r, task);
+        break;
+      case 'buy_land':
+        this.buyLand(r, task);
         break;
       case 'mourn':
         this.mourn(r, task);
@@ -2106,6 +2143,7 @@ export class Simulation {
   // ───────────── 移動 ─────────────
 
   private departFor(r: Resident, placeId: string) {
+    r.slot = undefined;
     if (r.indoors && r.placeId) {
       const from = this.map.places[r.placeId].spot;
       r.x = from.x;
@@ -2169,7 +2207,9 @@ export class Simulation {
     const task = this.currentTask(r);
     // 設備を使いに来たときだけ定員を気にする（人に会いに来た・何かしに来たときは関係ない）
     const usesPlace = ACTIONS[task.action as ActionId]?.place === place.id && !TARGETED_ACTIONS.includes(task.action as ActionId);
-    if (usesPlace && place.capacity && this.occupants(place, r) >= place.capacity) {
+    const plotted = this.plots.some((p) => p.placeId === place.id);
+    if (usesPlace && plotted) r.slot = this.assignSlot(r, place) ?? undefined;
+    if (usesPlace && (plotted ? !r.slot : place.capacity && this.occupants(place, r) >= place.capacity)) {
       // 満員なら、空いている別の材料集めに回る。それも無理なら市場をぶらつく
       const alt = (['fish', 'farm'] as const).find((a) => {
         const p = this.map.places[ACTIONS[a].place];
@@ -2651,6 +2691,126 @@ export class Simulation {
     return this.deeds.filter((d) => d.actorId === r.profile.id);
   }
 
+  // ───────────── 土地と設備の区画 ─────────────
+
+  /**
+   * 設備に着いた人に区画を割り当てる。自分の区画があればそこ（貸していたら返してもらう）、
+   * なければ誰のものでもない区画、それも埋まっていれば空いている人の区画を借りる。どれもなければ null
+   */
+  private assignSlot(r: Resident, place: Place): Resident['slot'] | null {
+    const plots = this.plots.filter((p) => p.placeId === place.id);
+    const users = this.residents.filter((o) => o !== r && o.slot?.placeId === place.id && o.placeId === place.id);
+    const mine = plots.find((p) => p.ownerId === r.profile.id);
+    if (mine) {
+      const renter = users.find((u) => u.slot?.plotId === mine.id);
+      if (renter) {
+        renter.slot = this.assignSlot(renter, place) ?? undefined;
+        if (!renter.slot) {
+          renter.override = { action: 'wander', until: this.clock.minutes + 60 };
+          this.remember(renter, `${r.profile.name}が自分の区画を使いに来たので、${place.name}を空けた`);
+        }
+      }
+      return { placeId: place.id, kind: 'own', plotId: mine.id };
+    }
+    const commonCap = plots.filter((p) => !p.ownerId).length;
+    if (users.filter((u) => u.slot?.kind === 'common').length < commonCap) return { placeId: place.id, kind: 'common' };
+    const vacant = plots
+      .filter((p) => p.ownerId && p.ownerId !== r.profile.id && !users.some((u) => u.slot?.plotId === p.id))
+      .filter((p) => r.money >= p.fee)
+      .sort((a, b) => a.fee - b.fee)[0];
+    return vacant ? { placeId: place.id, kind: 'rent', plotId: vacant.id } : null;
+  }
+
+  /** 借りた区画の使用料を、使った時間ぶん持ち主に払う。払えなくなったら作業をやめる */
+  private payRent(r: Resident, task: Task, dt: number): boolean {
+    if (r.slot?.kind !== 'rent') return true;
+    const plot = this.plots.find((p) => p.id === r.slot!.plotId);
+    const owner = plot?.ownerId ? this.get(plot.ownerId) : undefined;
+    if (!plot || !owner) {
+      r.slot = { placeId: r.slot.placeId, kind: 'common' };
+      return true;
+    }
+    r.progress.rent = (r.progress.rent ?? 0) + (dt / 60) * plot.fee;
+    while (r.progress.rent >= 1) {
+      if (r.money < 1) {
+        r.slot = undefined;
+        r.override = { action: 'wander', until: blockEnd(this.clock.minutes, task.block) };
+        this.remember(r, `${owner.profile.name}の区画の使用料が払えなくなり、仕事をやめた`);
+        return false;
+      }
+      r.progress.rent -= 1;
+      r.money -= 1;
+      owner.money += 1;
+      r.today.spent += 1;
+      owner.today.earned += 1;
+      const rec = this.rentToday.get(owner.profile.id) ?? { amount: 0, from: new Set<string>() };
+      rec.amount += 1;
+      rec.from.add(r.profile.name);
+      this.rentToday.set(owner.profile.id, rec);
+      const paid = this.rentToday.get(`by:${r.profile.id}`) ?? { amount: 0, from: new Set<string>() };
+      paid.amount += 1;
+      paid.from.add(owner.profile.name);
+      this.rentToday.set(`by:${r.profile.id}`, paid);
+    }
+    return true;
+  }
+
+  /** 区画を村から買う（代金は村の金庫へ） */
+  private buyLand(r: Resident, task: Task) {
+    r.visited = { targetId: 'buy_land', until: this.taskEnd(r, task) };
+    const placeId = task.target ?? '';
+    const price = PLOTS[placeId]?.price;
+    const plot = this.plots.find((p) => p.placeId === placeId && !p.ownerId);
+    const name = this.map.places[placeId]?.name ?? placeId;
+    if (!price || !plot) {
+      this.remember(r, `${name}の区画を買おうとしたが、もう空いている区画はなかった`);
+      return;
+    }
+    if (r.money < price) {
+      this.remember(r, `${name}の区画を買おうとしたが、お金が${price}Gなかった`);
+      return;
+    }
+    r.money -= price;
+    r.today.spent += price;
+    this.villageTreasury += price;
+    plot.ownerId = r.profile.id;
+    plot.fee = Math.max(0, Math.min(50, Math.round(task.block?.fee ?? DEFAULT_FEE)));
+    this.announce(`${r.profile.name}が${name}の区画を${price}Gで買った（ほかの人が使うときの使用料は1時間${plot.fee}G）`, 'life');
+  }
+
+  /** 区画の持ち主を移す（会話で売り買いが決まったとき） */
+  private transferPlot(from: Resident, to: Resident, placeId: string): boolean {
+    const plot = this.plots.find((p) => p.placeId === placeId && p.ownerId === from.profile.id);
+    if (!plot) return false;
+    plot.ownerId = to.profile.id;
+    return true;
+  }
+
+  /** いなくなった人の区画は、誰のものでもなくなる */
+  private releasePlots(r: Resident) {
+    for (const p of this.plotsOf(r)) {
+      p.ownerId = null;
+      p.fee = DEFAULT_FEE;
+    }
+  }
+
+  /** その人が持っている区画 */
+  plotsOf(r: Resident): Plot[] {
+    return this.plots.filter((p) => p.ownerId === r.profile.id);
+  }
+
+  /** 夜：今日の使用料のやりとりを記憶にする */
+  private settleRent() {
+    for (const [key, rec] of this.rentToday) {
+      const paying = key.startsWith('by:');
+      const r = this.get(paying ? key.slice(3) : key);
+      if (!r) continue;
+      const names = [...rec.from].join('、');
+      this.remember(r, paying ? `${names}の区画を借りて、使用料を${rec.amount}G払った` : `持っている区画を${names}に貸して、使用料を${rec.amount}G得た`);
+    }
+    this.rentToday.clear();
+  }
+
   // ───────────── 行商人 ─────────────
 
   /** 神さまの力：行商人を呼ぶ（今日まだ間に合えば今日、だめなら明日） */
@@ -2961,6 +3121,18 @@ export class Simulation {
         this.announce(`村の決まりができた：「${law.title}」${law.text && law.text !== law.title ? `（${law.text}）` : ''}`, 'assembly');
         return;
       }
+      case 'grant': {
+        // 村の金庫から渡す（相手がいなければ、みんなで分ける）
+        const amount = Math.min(this.villageTreasury, Math.max(0, Math.round(p.amount ?? 0)));
+        if (amount <= 0) return;
+        const to = p.beneficiaryId ? this.get(p.beneficiaryId) : undefined;
+        const receivers = to ? [to] : [...this.residents];
+        this.villageTreasury -= amount;
+        const share = Math.floor(amount / receivers.length);
+        receivers.forEach((r, k) => (r.money += share + (k === 0 ? amount - share * receivers.length : 0)));
+        this.announce(`村の金庫から${amount}Gを${to ? `${to.profile.name}に渡した` : 'みんなで分けた'}（金庫の残り ${this.villageTreasury}G）`, 'assembly');
+        return;
+      }
       case 'estate': {
         const est = p.estateHomeId ? this.estates[p.estateHomeId] : undefined;
         if (!est) return;
@@ -3002,6 +3174,10 @@ export class Simulation {
         return `決まり「${p.title ?? ''}」を作る${p.text && p.text !== p.title ? `（${p.text}）` : ''}`;
       case 'repeal':
         return `決まり「${this.laws.find((l) => l.id === p.lawId)?.title ?? `#${p.lawId}`}」を廃止する`;
+      case 'grant': {
+        const to = p.beneficiaryId ? this.get(p.beneficiaryId)?.profile.name : undefined;
+        return `村の金庫から${p.amount ?? 0}Gを${to ? `${to}に渡す` : 'みんなで分ける'}`;
+      }
       case 'estate': {
         const owner = p.estateHomeId ? this.estates[p.estateHomeId]?.ownerName : '';
         const to = p.beneficiaryId ? this.get(p.beneficiaryId)?.profile.name : undefined;
@@ -3413,6 +3589,17 @@ export class Simulation {
         to.today.earned += money;
         this.log(`${A}が「${org.name}」の金庫から${B}に${money}Gを渡した${ag.text ? `（${ag.text}）` : ''}`, 'deal');
         this.remember(to, `「${org.name}」の代表${A}から${money}Gを受け取った${ag.text ? `（${ag.text}）` : ''}`);
+        return;
+      }
+      case 'sell_land': {
+        // from が売る人、to が買う人。money は代金
+        const placeId = ag.land ?? '';
+        const name = this.map.places[placeId]?.name ?? placeId;
+        if (!this.plotsOf(from).some((p) => p.placeId === placeId)) return fail(`${name}の区画を売る`, `${A}は${name}の区画を持っていなかった`);
+        if (to.money < money) return fail(`${name}の区画を${money}Gで売る`, `${B}のお金が足りなかった`);
+        moveMoney(to, from, money);
+        this.transferPlot(from, to, placeId);
+        this.announce(`${A}が${B}に${name}の区画を${money}Gで売った`, 'life');
         return;
       }
       case 'promise': {

@@ -57,6 +57,18 @@ export const PEDDLER_BUY: Partial<Record<ItemId, number>> = {
 /** 行商人が売る、村では作れないもの。村のお金が外へ出る */
 export const PEDDLER_GOODS: ItemId[] = ['preserved', 'medicine', 'tool', 'ornament'];
 export const PEDDLER_SELL: Partial<Record<ItemId, number>> = { preserved: 25, medicine: 40, tool: 60, ornament: 50 };
+// ───────────── 土地と設備の区画 ─────────────
+
+/** 区画に分ける設備と、その数・村から買うときの値段 */
+export const PLOTS: Record<string, { count: number; price: number }> = {
+  field: { count: 4, price: 80 },
+  fishing: { count: 3, price: 60 },
+  kitchen: { count: 2, price: 80 },
+  bakery: { count: 1, price: 120 },
+};
+/** 持ち主が決めなかったときの使用料（1時間あたり） */
+export const DEFAULT_FEE = 3;
+
 /** 行商人が1回の訪問で払えるお金の上限 */
 export const PEDDLER_BUDGET = 160;
 /** 道具を持っていると、仕事がこれだけはかどる */

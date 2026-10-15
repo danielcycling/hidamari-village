@@ -13,6 +13,7 @@ import {
   HOME_UPGRADE_WOOD,
   MAX_HOME_LEVEL,
   PEDDLER_GOODS,
+  PLOTS,
   SATIETY_LOSS_AWAKE,
   WOOD_PER_HOUR,
   SKILL_IDS,
@@ -98,6 +99,7 @@ function actionCatalog(sim: Simulation, r: Resident): string {
     preach: `広場で、自分の信じることを村のみんなに説く。purpose に説く中身、faith_name に信仰の名前を書く（初めて説くなら、それが新しい信仰になる）。信じる人も、笑う人もいる`,
     build_shrine: `信じる信仰の祠を広場に建てる（木材${5}本）。祠があると、信じる人は手を合わせて心が落ち着く`,
     mourn: `亡くなった人のお墓に参る。target に亡くなった人の名前。${sim.graves.length ? `お墓：${sim.graves.map((g) => g.name).join('、')}` : '今はお墓はない'}`,
+    buy_land: `畑・釣り場・食堂・パン焼き小屋の区画を村から買う（代金は村の金庫へ）。target に field（畑）・fishing（釣り場）・kitchen（食堂）・bakery（パン焼き小屋）のどれか、fee にほかの人が使うときの1時間あたりの使用料を書く。区画の持ち主はいつでも自分の区画を使え、使っていないときはほかの人が使用料を払って使う。${landLine(sim, r)}`,
     peddler: `広場に来た行商人と取引する（村の外とのお金のやりとり）。sell_items に売る品、buy_items に買う品を書く（食べ物は自分の食べる分を残して売る）。${peddlerLine(sim)}`,
     guard: `村の入り口で見張る。盗賊が来たとき、見張りが多く元気なほど追い払える（ひとりでは難しい）。追い払えば村の人から一目置かれるが、けがをすることもある。追い払えなければ、村じゅうの人の持ち物（食べ物・木材など）が3割奪われる。${raidLine(sim)}`,
     call_assembly: `村のみんなに呼びかけ、その日の夕方に集会所で集会を開く。purpose に議題（例：誰かを村から追放する、誰かに罰金を科す、村の決まりを作る・やめる、村のことを話し合う）、相手がいれば target。結論は出席者の多数決で決まり、決まったことは実行される${sim.assemblies.some((a) => a.status !== 'done') ? '（今は別の集会が予定されている）' : ''}`,
@@ -227,6 +229,20 @@ function ties(sim: Simulation, r: Resident): string[] {
     }
   }
   return lines;
+}
+
+/** 区画の持ち主と値段（村じゅうが知っている） */
+function landLine(sim: Simulation, r: Resident): string {
+  const parts = Object.entries(PLOTS).map(([placeId, { price }]) => {
+    const plots = sim.plots.filter((p) => p.placeId === placeId);
+    const free = plots.filter((p) => !p.ownerId).length;
+    const owners = plots
+      .filter((p) => p.ownerId)
+      .map((p) => `${p.ownerId === r.profile.id ? '自分' : (sim.get(p.ownerId!)?.profile.name ?? '?')}（使用料${p.fee}G/時）`);
+    const name = sim.map.places[placeId]?.name ?? placeId;
+    return `${name}：${plots.length}区画のうち誰のものでもない${free}（1区画${price}G）${owners.length ? `、持ち主 ${owners.join('・')}` : ''}`;
+  });
+  return `今の区画：${parts.join('／')}。誰のものでもない区画が埋まっていると、持ち主に使用料を払って使うことになる`;
 }
 
 /** 行商人の知らせ（村じゅうが見聞きしている） */
@@ -514,6 +530,7 @@ export interface RawPlan {
     buy_items?: string[];
     faith_name?: string;
     offer?: number;
+    fee?: number;
   }[];
 }
 
@@ -560,6 +577,9 @@ export function buildPlanMessages(sim: Simulation, r: Resident, day: number): Ch
     ...(ties(sim, r).map((t) => `- ${t}`).concat(ties(sim, r).length === 0 ? ['- なし'] : [])),
     ...deedSections(sim, r),
     ...orgSection(sim, r),
+    ...(sim.plotsOf(r).length
+      ? ['', `持っている区画: ${sim.plotsOf(r).map((p) => `${sim.map.places[p.placeId]?.name ?? p.placeId}（使用料1時間${p.fee}G）`).join('、')}`]
+      : []),
     '',
     '村の人たち:',
     othersReport(sim, r),
@@ -617,6 +637,7 @@ export function planSchema(): object {
             target: { type: 'string' },
             purpose: { type: 'string' },
             faith_name: { type: 'string' },
+            fee: { type: 'integer', minimum: 0, maximum: 50 },
             offer: { type: 'integer', minimum: 0, maximum: 500 },
             sell_items: { type: 'array', items: { type: 'string', enum: ITEM_IDS } },
             buy_items: { type: 'array', items: { type: 'string', enum: PEDDLER_GOODS } },
@@ -687,6 +708,7 @@ export function parsePlan(raw: RawPlan, day: number, current: Resident, sim: Sim
           : {}),
         ...(action === 'preach' && clean(b.faith_name, 16) ? { faith: clean(b.faith_name, 16) } : {}),
         ...(action === 'pray' && Number(b.offer) > 0 ? { offer: Math.round(Number(b.offer)) } : {}),
+        ...(action === 'buy_land' ? { target: landTarget(b.target), fee: Number.isFinite(Number(b.fee)) ? Math.round(Number(b.fee)) : undefined } : {}),
         ...(TARGETED_ACTIONS.includes(action) || ['accuse', 'call_assembly', 'scavenge', 'pray', 'preach', 'mourn'].includes(action)
           ? { target: target === current.profile.id ? undefined : target, purpose: hasForeignWords(purpose) ? '' : purpose }
           : {}),
@@ -732,8 +754,15 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n
  * 小麦がないのにパンは焼けないので畑へ、雇われていないのに雇われ仕事はできないので自分の仕事へ、など。
  * 人に会う・休むといった本人の選択には手をつけない。
  */
+/** 区画を買う先（英語の名前か、日本語の呼び名） */
+function landTarget(raw: unknown): string | undefined {
+  const t = String(raw ?? '').trim();
+  const byName: Record<string, string> = { 畑: 'field', 釣り場: 'fishing', 食堂: 'kitchen', パン焼き小屋: 'bakery' };
+  return PLOTS[t] ? t : byName[t];
+}
+
 /** 一度すれば済む行動 */
-const ONE_SHOT: ActionId[] = ['pray', 'preach', 'mourn', 'build_shrine', 'accuse', 'call_assembly'];
+const ONE_SHOT: ActionId[] = ['pray', 'preach', 'mourn', 'build_shrine', 'accuse', 'call_assembly', 'buy_land'];
 
 function makeFeasible(blocks: PlanBlock[], r: Resident, sim: Simulation): PlanBlock[] {
   const f = (s: keyof typeof SKILLS) => skillFactor(r.skills[s]);

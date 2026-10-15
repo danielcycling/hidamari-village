@@ -81,6 +81,8 @@ export interface SaveData {
   raid?: Simulation['raid'];
   organizations?: Simulation['organizations'];
   peddler?: Simulation['peddler'];
+  plots?: Simulation['plots'];
+  villageTreasury?: number;
   moneyFlow?: Simulation['moneyFlow'];
   orgSeq?: number;
   laws?: Law[];
@@ -152,6 +154,8 @@ export function serialize(sim: Simulation, autoGod: boolean): SaveData {
     raid: sim.raid,
     organizations: sim.organizations,
     peddler: sim.peddler,
+    plots: sim.plots,
+    villageTreasury: sim.villageTreasury,
     moneyFlow: sim.moneyFlow,
     orgSeq: sim.orgSeq,
     laws: sim.laws,
@@ -248,6 +252,8 @@ export function restore(sim: Simulation, data: SaveData): void {
   sim.raid = data.raid ?? null;
   replace(sim.organizations, data.organizations ?? []);
   if (data.peddler) sim.peddler = data.peddler;
+  if (data.plots) replace(sim.plots, data.plots);
+  sim.villageTreasury = data.villageTreasury ?? 0;
   if (data.moneyFlow) Object.assign(sim.moneyFlow, data.moneyFlow);
   sim.orgSeq = data.orgSeq ?? 0;
   sim.assemblySeq = data.assemblySeq ?? 0;

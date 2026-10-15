@@ -162,7 +162,7 @@ function parse(
 }
 
 /** 物・お金・約束・非行の話が出たか（出ていなければ、記録係に書き出してもらうことはない） */
-const DEAL_WORDS = /信仰|信じ|祈|祠|組織|仲間に|会費|金庫|組合|団|入れて|抜け|あげ|もら|分け|譲|売|買|貸|借|返|払|代金|雇|給料|教え|約束|黙|内緒|秘密|盗|奪|殴|殺|見た|聞いた|お金|[0-9０-９]+\s*[G個円]|パン|魚|野菜|小麦|定食/;
+const DEAL_WORDS = /区画|土地|使用料|信仰|信じ|祈|祠|組織|仲間に|会費|金庫|組合|団|入れて|抜け|あげ|もら|分け|譲|売|買|貸|借|返|払|代金|雇|給料|教え|約束|黙|内緒|秘密|盗|奪|殴|殺|見た|聞いた|お金|[0-9０-９]+\s*[G個円]|パン|魚|野菜|小麦|定食/;
 
 function needsRecorder(conv: Conversation, raw: RawConversation, sim: Simulation): boolean {
   if (conv.purpose) return true;
@@ -170,6 +170,9 @@ function needsRecorder(conv: Conversation, raw: RawConversation, sim: Simulation
   const text = [...(raw.lines ?? []).map((l) => l.text), raw.summary].join(' ');
   return DEAL_WORDS.test(text);
 }
+
+/** 区画の呼び名 → 設備 */
+const LAND_IDS: Record<string, string> = { 畑: 'field', 釣り場: 'fishing', 食堂: 'kitchen', パン焼き小屋: 'bakery' };
 
 /** 書き出された取り決めを検証する（同じものが重ねて出たら1つにまとめる） */
 function parseAgreements(conv: Conversation, raw: RawAgreement[], spoken: string[]): Agreement[] {
@@ -193,6 +196,7 @@ function parseAgreements(conv: Conversation, raw: RawAgreement[], spoken: string
         action: work,
         text: hasForeignWords(text) ? '' : text,
         org: clean(ag.org, 20) || undefined,
+        land: LAND_IDS[String(ag.land ?? '')],
       },
     ];
   });

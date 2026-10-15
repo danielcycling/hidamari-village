@@ -88,6 +88,10 @@ export class Inspector {
       el('p', r.selfImage ? 'self-image' : 'mind-empty', r.selfImage || 'まだ自分がどんな人間なのか、分かっていない。'),
     );
     if (r.wish) section.append(el('p', 'wish', `望み：${r.wish}`));
+    if (this.sim.plotsOf(r).length) {
+      const owned = this.sim.plotsOf(r).map((p) => `${this.sim.map.places[p.placeId]?.name}（${p.fee}G/時）`).join('・');
+      section.append(el('p', 'mind-money', `持っている区画：${owned}`));
+    }
     for (const o of this.sim.orgsOf(r)) {
       section.append(el('p', 'mind-money', `「${o.name}」の${o.leaderId === r.profile.id ? '代表' : 'メンバー'}（${o.purpose}）`));
     }

@@ -37,7 +37,8 @@ export type ActionId =
   | 'guard'
   | 'peddler'
   | 'build_shrine'
-  | 'mourn';
+  | 'mourn'
+  | 'buy_land';
 
 /** 相手のいるところへ行ってする行動（target が要る） */
 export const TARGETED_ACTIONS: ActionId[] = ['visit', 'steal', 'rob', 'attack', 'kill'];
@@ -76,6 +77,8 @@ export const ACTIONS: Record<ActionId, ActionDef> = {
   build_shrine: { label: '祠を建てる', place: 'plaza' },
   // 亡くなった人のお墓に参る（場所は、そのお墓）
   mourn: { label: 'お墓参り', place: 'plaza' },
+  // 畑・釣り場・食堂・パン焼き小屋の区画を村から買う（代金は村の金庫へ）
+  buy_land: { label: '区画を買う', place: 'plaza' },
   // 村の入り口で見張る（盗賊が来たときに追い払う）
   guard: { label: '見張り', place: 'gate' },
   // 広場に来た行商人と取引する（村の外とお金をやりとりする）
@@ -110,6 +113,8 @@ export interface PlanBlock {
   /** 説く信仰の名前（preach）・お供えするお金（pray） */
   faith?: string;
   offer?: number;
+  /** 区画を買うとき：ほかの人が使うときの1時間あたりの使用料 */
+  fee?: number;
   /** 行商人に売るもの・買うもの */
   sellItems?: ItemId[];
   buyItems?: ItemId[];

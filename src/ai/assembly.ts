@@ -2,7 +2,7 @@ import { HOME_LEVEL_NAMES, type Assembly, type AssemblyResult, type ProposalKind
 import type { ChatMessage, OllamaClient } from './llm';
 import { affinityLabel, hungerLabel, knowledgeOf, secretsOf } from './prompt';
 
-const PROPOSAL_KINDS: ProposalKind[] = ['exile', 'fine', 'rule', 'repeal', 'estate', 'none'];
+const PROPOSAL_KINDS: ProposalKind[] = ['exile', 'fine', 'rule', 'repeal', 'estate', 'grant', 'none'];
 
 const SYSTEM = `あなたは小さな村の集会の記録係です。村人全員が集会所に集まり、ある議題について話し合って多数決をとります。その様子を書きます。
 
@@ -17,6 +17,7 @@ const SYSTEM = `あなたは小さな村の集会の記録係です。村人全�
   - fine: target に罰金（amount G）を科す。beneficiary は受け取る人（いなければ空。村のみんなで分ける）
   - rule: 村の決まりを作る（title に短い名前、text に中身）
   - repeal: 今ある決まりを廃止する（law_id に番号）
+  - grant: 村の金庫から amount G を渡す（beneficiary に渡す相手。空なら村のみんなで分ける）
   - estate: 亡くなった人・出ていった人の遺品の行き先を決める（estate_of にその人の名前、beneficiary に受け継ぐ人。空なら村のみんなで分ける）
   - none: 提案はまとまらず、話し合いだけで終わる
 - 今ある決まりと同じものを、もう一度作る提案はしない（変えたいなら repeal してから作り直すか、別の中身にする）。議題に関係して、出席者が知っている問題（盗み・約束破りなど）があれば、それを取り上げてもよい。
@@ -66,6 +67,7 @@ function buildMessages(sim: Simulation, a: Assembly, attendees: Resident[]): Cha
     '今ある村の決まり:',
     ...(laws.length ? laws : ['- まだない']),
     ...estateLines(sim),
+    `村の金庫: ${sim.villageTreasury}G（区画の代金などが入る）`,
     '',
     `村の最近の出来事: ${sim.recentNews().slice(-4).map((n) => n.text).join('／') || '特になし'}`,
     '',
@@ -184,8 +186,8 @@ function parse(sim: Simulation, raw: RawAssembly, attendees: Resident[]): Assemb
     proposal: {
       kind,
       targetId,
-      amount: kind === 'fine' ? Math.max(1, Math.round(Number(p.amount) || 0)) : undefined,
-      beneficiaryId: (kind === 'fine' || kind === 'estate') && p.beneficiary ? byName.get(p.beneficiary) : undefined,
+      amount: kind === 'fine' || kind === 'grant' ? Math.max(1, Math.round(Number(p.amount) || 0)) : undefined,
+      beneficiaryId: (kind === 'fine' || kind === 'estate' || kind === 'grant') && p.beneficiary ? byName.get(p.beneficiary) : undefined,
       estateHomeId: kind === 'estate' ? estateHomeId : undefined,
       title: kind === 'rule' ? title : undefined,
       text: kind === 'rule' ? text : undefined,
