@@ -94,7 +94,7 @@ function actionCatalog(sim: Simulation, r: Resident): string {
     kill: '相手を殺し、相手の持ち物とお金をすべて自分のものにする。target に相手の名前。自分の体力が相手より多いほど、相手が弱っているほど成功しやすい。失敗すると相手は傷を負って逃げる。その場に誰もいなければ、誰がやったかは分からない',
     accuse: '広場で、ある人のことを村のみんなに言いふらす（本当のことでも嘘でもよい）。target に相手の名前、purpose に言いふらす中身',
     scavenge: `亡くなった人・出ていった人の空き家から、残された物とお金を持ち出す。target にその人の名前。誰の物でもないが、見られれば盗みと思われるかもしれない。${estateLine(sim)}`,
-    pray: `家で祈る。何に祈るかは自分しだい。purpose に祈りの言葉を書く。信じる信仰があれば offer にお供えのお金を書ける（信仰の蓄えになる）`,
+    pray: `家でひとりで祈る（人に説くのは preach）。何に祈るかは自分しだい。purpose に祈りの言葉を書く。信じる信仰があれば offer にお供えのお金を書ける（信仰の蓄えになる）`,
     preach: `広場で、自分の信じることを村のみんなに説く。purpose に説く中身、faith_name に信仰の名前を書く（初めて説くなら、それが新しい信仰になる）。信じる人も、笑う人もいる`,
     build_shrine: `信じる信仰の祠を広場に建てる（木材${5}本）。祠があると、信じる人は手を合わせて心が落ち着く`,
     mourn: `亡くなった人のお墓に参る。target に亡くなった人の名前。${sim.graves.length ? `お墓：${sim.graves.map((g) => g.name).join('、')}` : '今はお墓はない'}`,
@@ -666,7 +666,9 @@ export function parsePlan(raw: RawPlan, day: number, current: Resident, sim: Sim
           : b.action === 'scavenge'
             ? !target
             : targeted && (!target || target === current.profile.id);
-      const action = (missing ? (b.action === 'pray' ? 'rest' : 'wander') : b.action) as ActionId;
+      let action = (missing ? (b.action === 'pray' ? 'rest' : 'wander') : b.action) as ActionId;
+      // 「〜を説く」と書いて祈る行動を選んでいたら、本人のつもりは説くこと
+      if (action === 'pray' && /説く|説教|広める|布教/.test(purpose)) action = 'preach';
       const prices: Partial<Record<ItemId, number>> = {};
       for (const id of ITEM_IDS) {
         const p = Math.round(Number(b.prices?.[id]));
