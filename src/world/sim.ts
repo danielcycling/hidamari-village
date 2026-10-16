@@ -596,7 +596,26 @@ export type SimEvents = {
   residentLeft: { name: string };
   /** 村の集会が始まった（AIに話し合いを考えてもらう） */
   assemblyStart: Assembly;
+  /** 観察日記に1日分が書かれた */
+  diaryWritten: DiaryEntry;
 };
+
+/** 観察日記の1日分（観察者だけが読む。村人は知らない） */
+export interface DiaryEntry {
+  day: number;
+  title: string;
+  body: string;
+  /** AIなしで、出来事を並べただけのもの */
+  plain?: boolean;
+}
+
+/** 日記の材料にする、その日の出来事 */
+export interface DiaryNote {
+  day: number;
+  time: string;
+  kind: LogEntry['kind'];
+  text: string;
+}
 
 /** 村人みんなが知っている出来事 */
 export interface News {
@@ -736,6 +755,12 @@ export class Simulation {
   villageTreasury = 0;
   /** 教えようとして教えられなかった回数（「教える人>教わる人>技能」ごと）。重なるほど不信が深まる */
   teachFails: Record<string, number> = {};
+  /** 観察日記（観察者だけが読む） */
+  readonly diary: DiaryEntry[] = [];
+  /** まだ日記に書いていない出来事 */
+  readonly diaryNotes: DiaryNote[] = [];
+  /** 前に日記を書いたときの気持ち（「A>B」ごと。大きく動いた関係を日記に書くため） */
+  diaryAffinity: Record<string, number> = {};
   /** 今日、区画の使用料をやりとりした記録（夜に記憶にする） */
   private rentToday = new Map<string, { amount: number; from: Set<string> }>();
   /** 村の外とのお金の出入り（行商人・やってきた人・出ていった人）。村のお金の合計 ＝ 最初の額 ＋ in − out */

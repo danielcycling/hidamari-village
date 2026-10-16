@@ -5,6 +5,7 @@ import type { Renderer } from '../render/renderer';
 import { avatar } from './avatar';
 import { Inspector } from './inspector';
 import { SocietyTab } from './societyTab';
+import { DiaryTab } from './diaryTab';
 import { RelationGraph } from './relationGraph';
 import type { LogEntry, Resident, Simulation } from '../world/sim';
 import { CONDITIONS, seasonOf, SEASONS, WEATHER, type WeatherKind } from '../world/weather';
@@ -19,6 +20,19 @@ const SPEEDS = [
 ];
 const MAX_LOG = 200;
 
+/** その日の一枚に選ぶ見どころの重み（大きいほど劇的） */
+function momentScore(e: LogEntry): number {
+  if (e.kind === 'death') return 6;
+  if (e.kind === 'crime' && !/と聞いた/.test(e.text)) return 5;
+  if (e.kind === 'assembly' && /集会で/.test(e.text)) return 4;
+  if (e.kind === 'god') return 3;
+  if (e.kind === 'life' && /やってき|村を出|改築|祠|作った/.test(e.text)) return 3;
+  if (e.kind === 'prayer') return 2;
+  if (e.kind === 'system' && /盗賊|行商人が広場/.test(e.text)) return 2;
+  if (e.kind === 'deal') return 1;
+  return 0;
+}
+
 export class Panel {
   private readonly clockEl = document.getElementById('clock')!;
   private readonly weatherEl = document.getElementById('weather')!;
@@ -30,6 +44,7 @@ export class Panel {
   private readonly conversationEls = new Map<number, HTMLElement>();
   private readonly inspector: Inspector;
   private readonly society: SocietyTab;
+  readonly diary: DiaryTab;
   private societyRenderedAt = 0;
   private readonly graph: RelationGraph;
   private activeTab = 'panel-log';
@@ -47,6 +62,7 @@ export class Panel {
     this.buildSpeedControls();
     this.inspector = new Inspector(sim);
     this.society = new SocietyTab(sim);
+    this.diary = new DiaryTab(sim, document.getElementById('world') as HTMLCanvasElement);
     this.graph = new RelationGraph(sim, (id) => this.select(id));
     this.buildTabs();
     for (const r of sim.residents) this.addResidentItem(r);
@@ -57,6 +73,7 @@ export class Panel {
     });
     sim.events.on('log', (e) => {
       this.appendLog(e);
+      this.diary.noteMoment(sim.clock.hourOfDay < 3 ? sim.clock.day - 1 : sim.clock.day, momentScore(e));
       if (e.kind === 'god' || e.kind === 'summary') this.mindDirty = true;
     });
     this.inspector.render(null);
@@ -79,6 +96,7 @@ export class Panel {
     if (panelId === 'panel-graph') this.graph.render();
     if (panelId === 'panel-mind') this.inspector.render(this.renderer.selectedId);
     if (panelId === 'panel-society') this.society.render();
+    if (panelId === 'panel-diary') this.diary.render();
   }
 
   refresh(): void {

@@ -1151,3 +1151,79 @@ body {
   color: var(--muted);
   text-align: right;
 }
+
+/* ───────────── 日記タブ ───────────── */
+.diary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.diary-head h3 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--accent);
+}
+
+.diary-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.diary-actions button {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 2px solid var(--line);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.diary-actions button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.diary-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.diary-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.diary-entry {
+  border-top: 2px solid var(--line);
+  padding: 10px 0 6px;
+}
+
+.diary-entry h4 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.diary-entry p {
+  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.diary-entry p.diary-plain {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.diary-image {
+  display: block;
+  width: 100%;
+  image-rendering: pixelated;
+  border: 2px solid var(--line);
+  margin-bottom: 6px;
+}

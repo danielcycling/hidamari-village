@@ -10,6 +10,8 @@ import {
   type Debt,
   type Law,
   type Deed,
+  type DiaryEntry,
+  type DiaryNote,
   type Delivery,
   type Employment,
   type Estate,
@@ -84,6 +86,9 @@ export interface SaveData {
   plots?: Simulation['plots'];
   villageTreasury?: number;
   teachFails?: Record<string, number>;
+  diary?: DiaryEntry[];
+  diaryNotes?: DiaryNote[];
+  diaryAffinity?: Record<string, number>;
   moneyFlow?: Simulation['moneyFlow'];
   orgSeq?: number;
   laws?: Law[];
@@ -158,6 +163,9 @@ export function serialize(sim: Simulation, autoGod: boolean): SaveData {
     plots: sim.plots,
     villageTreasury: sim.villageTreasury,
     teachFails: sim.teachFails,
+    diary: sim.diary,
+    diaryNotes: sim.diaryNotes,
+    diaryAffinity: sim.diaryAffinity,
     moneyFlow: sim.moneyFlow,
     orgSeq: sim.orgSeq,
     laws: sim.laws,
@@ -257,6 +265,9 @@ export function restore(sim: Simulation, data: SaveData): void {
   if (data.plots) replace(sim.plots, data.plots);
   sim.villageTreasury = data.villageTreasury ?? 0;
   sim.teachFails = data.teachFails ?? {};
+  replace(sim.diary, data.diary ?? []);
+  replace(sim.diaryNotes, data.diaryNotes ?? []);
+  sim.diaryAffinity = data.diaryAffinity ?? {};
   if (data.moneyFlow) Object.assign(sim.moneyFlow, data.moneyFlow);
   sim.orgSeq = data.orgSeq ?? 0;
   sim.assemblySeq = data.assemblySeq ?? 0;

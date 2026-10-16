@@ -4,6 +4,8 @@ import { AutoGod } from './ai/god';
 import { LifePlanner } from './ai/lifePlanner';
 import { OllamaClient } from './ai/llm';
 import { AssemblyDirector } from './ai/assembly';
+import { DiaryWriter } from './ai/diary';
+import { clearDiaryImages } from './ui/diaryTab';
 import { ModelPicker, savedModel } from './ui/modelPicker';
 import { Renderer } from './render/renderer';
 import { GodPanel } from './ui/godPanel';
@@ -46,6 +48,7 @@ async function main() {
   const director = new ConversationDirector(sim, llm);
   const lifePlanner = new LifePlanner(sim, llm);
   new AssemblyDirector(sim, llm);
+  new DiaryWriter(sim, llm);
   const panel = new Panel(sim, renderer, llm, director, lifePlanner);
   const autoGod = new AutoGod(sim, llm);
   if (save?.autoGod) autoGod.setEnabled(true);
@@ -87,6 +90,7 @@ async function main() {
     if (!confirm('村を1日目からやり直します。住民の記憶や関係はすべて消えます。よろしいですか？')) return;
     saving = false;
     clearSave();
+    clearDiaryImages();
     location.href = location.pathname;
   });
 

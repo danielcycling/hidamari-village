@@ -107,6 +107,34 @@ async fn ollama_fetch(method: String, path: String, body: Option<String>) -> Res
     Ok(HttpReply { status, body })
 }
 
+/// 書き出したもの（観察日記など）を、ダウンロードフォルダに保存する。同じ名前があれば番号をつける
+#[tauri::command]
+fn save_export(file_name: String, contents: String) -> Result<String, String> {
+    let name = std::path::Path::new(&file_name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("ファイル名が正しくありません")?
+        .to_string();
+    #[cfg(target_os = "windows")]
+    let home = std::env::var_os("USERPROFILE");
+    #[cfg(not(target_os = "windows"))]
+    let home = std::env::var_os("HOME");
+    let dir = PathBuf::from(home.ok_or("ホームフォルダが見つかりません")?).join("Downloads");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) => (s.to_string(), format!(".{e}")),
+        None => (name.clone(), String::new()),
+    };
+    let mut path = dir.join(&name);
+    let mut n = 2;
+    while path.exists() {
+        path = dir.join(format!("{stem}（{n}）{ext}"));
+        n += 1;
+    }
+    std::fs::write(&path, contents).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// 入っている Ollama を起動し、応答するまで少し待つ
 #[tauri::command]
 async fn start_ollama() -> Result<(), String> {
@@ -244,7 +272,7 @@ async fn pull_model(app: AppHandle, model: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![ollama_status, start_ollama, install_ollama, pull_model, ollama_fetch])
+        .invoke_handler(tauri::generate_handler![ollama_status, start_ollama, install_ollama, pull_model, ollama_fetch, save_export])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

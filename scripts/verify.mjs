@@ -20,6 +20,7 @@ const { OllamaClient } = await load('/src/ai/llm.ts');
 const { LifePlanner } = await load('/src/ai/lifePlanner.ts');
 const { ConversationDirector } = await load('/src/ai/director.ts');
 const { AssemblyDirector } = await load('/src/ai/assembly.ts');
+const { DiaryWriter } = await load('/src/ai/diary.ts');
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(`--${name}`);
@@ -34,6 +35,8 @@ console.log('model:', llm.model, 'seed:', seed);
 const director = new ConversationDirector(sim, llm);
 const planner = new LifePlanner(sim, llm);
 new AssemblyDirector(sim, llm);
+const diary = new DiaryWriter(sim, llm);
+sim.events.on('diaryWritten', (d) => console.log(`\n  📖 ${d.day}日目「${d.title}」${d.plain ? '（AIなし）' : ''}\n  ${d.body.replace(/\n/g, '\n  ')}\n`));
 
 if (flag('hard')) {
   sim.startCondition('drought', 5);
@@ -113,6 +116,6 @@ for (const r of sim.residents) {
 }
 console.log('組織と教え:', JSON.stringify(sim.organizations.map((o) => ({ name: o.name, kind: o.kind, members: o.memberIds.length, treasury: o.treasury }))));
 console.log('決まり:', sim.laws.map((l) => l.title).join('、') || 'なし');
-console.log('エラー:', planner.lastError, director.lastError);
+console.log('エラー:', planner.lastError, director.lastError, diary.lastError);
 await server.close();
 process.exit(0);
