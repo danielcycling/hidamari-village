@@ -62,9 +62,9 @@ sim.events.on('hourly', ({ day, hour }) => {
 const notable = [];
 const keep = (e) =>
   ['deal', 'summary', 'crime', 'death', 'assembly', 'prayer', 'god'].includes(e.kind) ||
-  (e.kind === 'trade' && /行商人/.test(e.text)) ||
+  (e.kind === 'trade' && /行商人|保存食/.test(e.text)) ||
   (e.kind === 'system' && /日照り|実る|実り|魚|嵐|盗賊|になった|行商人/.test(e.text)) ||
-  (e.kind === 'life' && /追い詰め|飢え始め|やってき|村を出|名乗る|やめ|改築|遺品|作った|に入った|を抜けた|教え|祠|お墓|言いふらし|集会/.test(e.text)) ||
+  (e.kind === 'life' && /追い詰め|飢え始め|やってき|村を出|名乗る|やめ|改築|遺品|作った|に入った|を抜けた|教え|祠|お墓|言いふらし|集会|区画/.test(e.text)) ||
   (e.kind === 'plan' && /自己像|望み/.test(e.text)) ||
   (e.kind === 'speech' && !e.conversationId);
 sim.events.on('log', (e) => {
@@ -94,6 +94,7 @@ while (reported <= days) {
     for (const n of notable.splice(0)) console.log('  * ' + n);
     console.log(`  空: ${sim.describeWeather('now')}`);
     console.log(`  お金: 村の合計 ${sim.totalMoney()}G（外から ${sim.moneyFlow.in}G・外へ ${sim.moneyFlow.out}G）${sim.totalMoney() !== money0 + sim.moneyFlow.in - sim.moneyFlow.out ? '  !! 計算が合わない' : ''}`);
+    console.log(`  区画: 金庫${sim.villageTreasury}G ${sim.plots.filter((p) => p.ownerId).map((p) => `${p.placeId}=${sim.get(p.ownerId)?.profile.name}(${p.fee}G)`).join(' ') || '持ち主なし'}`);
     for (const r of sim.residents) {
       const best = SKILL_IDS.filter((s) => r.skills[s] >= 5).map((s) => `${SKILLS[s]}${Math.round(r.skills[s])}`).join('/');
       const hours = Object.entries(r.history.at(-1)?.hours ?? {})

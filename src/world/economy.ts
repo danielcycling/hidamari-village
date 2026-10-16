@@ -61,11 +61,13 @@ export const PEDDLER_SELL: Partial<Record<ItemId, number>> = { preserved: 25, me
 
 /** 区画に分ける設備と、その数・村から買うときの値段 */
 export const PLOTS: Record<string, { count: number; price: number }> = {
-  field: { count: 4, price: 80 },
-  fishing: { count: 3, price: 60 },
-  kitchen: { count: 2, price: 80 },
-  bakery: { count: 1, price: 120 },
+  field: { count: 4, price: 40 },
+  fishing: { count: 3, price: 30 },
+  kitchen: { count: 2, price: 40 },
+  bakery: { count: 1, price: 60 },
 };
+/** 自分の区画は手入れが行き届いているので、仕事がこれだけはかどる */
+export const OWN_PLOT_BOOST = 1.2;
 /** 持ち主が決めなかったときの使用料（1時間あたり） */
 export const DEFAULT_FEE = 3;
 
@@ -233,6 +235,6 @@ export const STARTING_FOOD: [ItemId, number][] = [
   ['bread', 3],
   ['vegetable', 4],
 ];
-/** 新入村民は、少しの蓄えを持ってやってくる（村の外からお金が入る）。この範囲でばらつく */
-export const NEWCOMER_MONEY: [number, number] = [10, 50];
-export const NEWCOMER_FOOD: [ItemId, number][] = [['bread', 1]];
+/** 新入村民は、引っ越しの蓄えを持ってやってくる（村の外からお金が入る）。この範囲でばらつき、村の人より多いこともある */
+export const NEWCOMER_MONEY: [number, number] = [120, 220];
+export const NEWCOMER_FOOD: [ItemId, number][] = [['bread', 2]];

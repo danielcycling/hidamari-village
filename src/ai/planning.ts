@@ -14,6 +14,7 @@ import {
   MAX_HOME_LEVEL,
   PEDDLER_GOODS,
   PLOTS,
+  OWN_PLOT_BOOST,
   SATIETY_LOSS_AWAKE,
   WOOD_PER_HOUR,
   SKILL_IDS,
@@ -242,7 +243,31 @@ function landLine(sim: Simulation, r: Resident): string {
     const name = sim.map.places[placeId]?.name ?? placeId;
     return `${name}：${plots.length}区画のうち誰のものでもない${free}（1区画${price}G）${owners.length ? `、持ち主 ${owners.join('・')}` : ''}`;
   });
-  return `今の区画：${parts.join('／')}。誰のものでもない区画が埋まっていると、持ち主に使用料を払って使うことになる`;
+  return `今の区画：${parts.join('／')}。自分の区画では手入れが行き届き、仕事が${OWN_PLOT_BOOST}倍はかどる。混んでいても自分の区画はいつでも使え、使っていない時間は使用料が入る。誰のものでもない区画が埋まっていると、持ち主に使用料を払って使うことになる`;
+}
+
+/** 区画を持っていない人に、今の手持ちで買える区画を知らせる（買うかどうかは本人しだい） */
+function affordableLand(sim: Simulation, r: Resident): string[] {
+  const can = Object.entries(PLOTS)
+    .filter(([placeId, { price }]) => price <= r.money && sim.plots.some((p) => p.placeId === placeId && !p.ownerId))
+    .map(([placeId, { price }]) => `${sim.map.places[placeId]?.name ?? placeId}（${price}G）`);
+  if (!can.length) return [];
+  return [
+    '',
+    `自分の区画はまだない。今の手持ちで買える区画: ${can.join('・')}（buy_land）。自分の区画では仕事が${OWN_PLOT_BOOST}倍はかどり、使っていない時間はほかの人から使用料が入る`,
+  ];
+}
+
+/** 村の土地の持ち主（村じゅうが知っている） */
+export function landOwnersLine(sim: Simulation, r: Resident): string {
+  const owned = sim.plots.filter((p) => p.ownerId);
+  if (!owned.length) return '村の土地: まだ誰も区画を持っていない（村から買える）';
+  const by = new Map<string, string[]>();
+  for (const p of owned) {
+    const who = p.ownerId === r.profile.id ? '自分' : (sim.get(p.ownerId!)?.profile.name ?? '?');
+    by.set(who, [...(by.get(who) ?? []), sim.map.places[p.placeId]?.name ?? p.placeId]);
+  }
+  return `村の土地: ${[...by].map(([who, places]) => `${who}が${places.join('・')}の区画を持っている`).join('、')}`;
 }
 
 /** 行商人の知らせ（村じゅうが見聞きしている） */
@@ -579,7 +604,7 @@ export function buildPlanMessages(sim: Simulation, r: Resident, day: number): Ch
     ...orgSection(sim, r),
     ...(sim.plotsOf(r).length
       ? ['', `持っている区画: ${sim.plotsOf(r).map((p) => `${sim.map.places[p.placeId]?.name ?? p.placeId}（使用料1時間${p.fee}G）`).join('、')}`]
-      : []),
+      : affordableLand(sim, r)),
     '',
     '村の人たち:',
     othersReport(sim, r),
@@ -865,6 +890,7 @@ export function buildSelfImageMessages(sim: Simulation, r: Resident): ChatMessag
     ...r.history.slice(-3).map((d) => `- ${d.day}日目: ${d.summary}`),
     '',
     `人との関係: ${relText || 'まだ誰とも親しくない'}`,
+    landOwnersLine(sim, r),
     '',
     '最近の記憶:',
     ...r.memories.slice(-12).map((m) => `- ${m.day}日目 ${m.time}: ${m.text}`),

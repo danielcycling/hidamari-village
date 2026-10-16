@@ -50,6 +50,7 @@ import {
   PEDDLER_GOODS,
   PEDDLER_SELL,
   TOOL_BOOST,
+  OWN_PLOT_BOOST,
   nextToEat,
   practice,
   removeSpoiled,
@@ -145,6 +146,8 @@ const ASSEMBLY_TO = 19.5;
 const ASSEMBLY_GIVE_UP = 240;
 /** 教わると、腕前の差のこの割合だけ上達する */
 const TEACH_GAIN = 0.4;
+/** これだけ上手でないと、教えても身につかない */
+export const TEACH_MIN_GAP = 5;
 /** 教わる代金の最低額（上達1あたり） */
 const TEACH_FEE_PER_POINT = 10;
 /** 好感度が毎晩0へ戻っていく割合 */
@@ -1048,7 +1051,7 @@ export class Simulation {
       this.remember(r, `住むことになった家に、前の住人${left.ownerName}の物が残っていた（${what}）`);
       this.log(`${profile.name}は、空き家に残っていた${left.ownerName}の遺品（${what}）を手に入れた`, 'life');
     }
-    this.announce(`${profile.name}という人が村の外からやってきて、空き家に住むことになった`, 'life');
+    this.announce(`${profile.name}という人が村の外からやってきて、空き家に住むことになった。引っ越しの蓄えを持ってきたらしい`, 'life');
     this.makePlan(r);
     this.events.emit('residentAdded', r);
     return r;
@@ -1979,7 +1982,8 @@ export class Simulation {
     r.skills[skill] = practice(r.skills[skill], dt);
     // 満ち足りていると仕事がはかどり、不満だとやる気が出ない
     const tool = countItem(r.inventory, 'tool') > 0 ? TOOL_BOOST : 1;
-    return skillFactor(r.skills[skill]) * moodFactor(r.satisfaction ?? 50) * tool;
+    const own = r.slot?.kind === 'own' && r.slot.placeId === r.placeId ? OWN_PLOT_BOOST : 1;
+    return skillFactor(r.skills[skill]) * moodFactor(r.satisfaction ?? 50) * tool * own;
   }
 
   /** 端数は働いた本人が持ち、1個になったら持ち主のものになる */
@@ -2806,6 +2810,7 @@ export class Simulation {
       const r = this.get(paying ? key.slice(3) : key);
       if (!r) continue;
       const names = [...rec.from].join('、');
+      if (paying) this.log(`${r.profile.name}は今日、${names}の区画を借りて使用料を${rec.amount}G払った`, 'life');
       this.remember(r, paying ? `${names}の区画を借りて、使用料を${rec.amount}G払った` : `持っている区画を${names}に貸して、使用料を${rec.amount}G得た`);
     }
     this.rentToday.clear();
@@ -3511,13 +3516,20 @@ export class Simulation {
         if (!skill) return;
         const label = SKILLS[skill];
         const gap = from.skills[skill] - to.skills[skill];
-        if (gap < 5) {
+        if (gap < TEACH_MIN_GAP) {
           this.log(`${A}は${B}に${label}を教えようとしたが、教えられるほどの腕はなかった`, 'deal');
           // 誰が上手かは、こうした経験から知っていく
           const theirs = Math.round(from.skills[skill]);
           const mine = Math.round(to.skills[skill]);
           this.remember(to, `${A}に${label}を教わろうとしたが、${A}の${label}の腕前（${theirs}）は自分（${mine}）${theirs < mine ? 'より下手だった' : 'とほとんど変わらなかった'}`);
           this.remember(from, `${B}に${label}を教えようとしたが、自分の腕前（${theirs}）では${B}（${mine}）に教えられることはなかった`);
+          // 教えると言ったのに何も教われなかった：見栄やあてずっぽうの約束は、相手の不信を招く
+          this.feel(
+            to,
+            from,
+            theirs < mine ? -8 : -5,
+            `${this.clock.day}日目、${label}を教えると言ったのに、${theirs < mine ? '自分より下手だった' : '何も教われなかった'}`,
+          );
           return;
         }
         // 教わるには必ずお金がかかる（決めた額か、上達の幅に見合った最低額の高いほう）
