@@ -734,6 +734,8 @@ export class Simulation {
   readonly plots: Plot[] = [];
   /** 村の金庫（区画の代金などが入る。使い道は集会で決める） */
   villageTreasury = 0;
+  /** 教えようとして教えられなかった回数（「教える人>教わる人>技能」ごと）。重なるほど不信が深まる */
+  teachFails: Record<string, number> = {};
   /** 今日、区画の使用料をやりとりした記録（夜に記憶にする） */
   private rentToday = new Map<string, { amount: number; from: Set<string> }>();
   /** 村の外とのお金の出入り（行商人・やってきた人・出ていった人）。村のお金の合計 ＝ 最初の額 ＋ in − out */
@@ -2691,6 +2693,14 @@ export class Simulation {
   }
 
   /** その人がしたこと（隠していること） */
+  /** 2人の間で、教えようとして教えられなかったこと（技能ごとの回数） */
+  teachFailsBetween(teacher: Resident, learner: Resident): { skill: SkillId; times: number }[] {
+    const prefix = `${teacher.profile.id}>${learner.profile.id}>`;
+    return Object.entries(this.teachFails)
+      .filter(([k]) => k.startsWith(prefix))
+      .map(([k, times]) => ({ skill: k.slice(prefix.length) as SkillId, times }));
+  }
+
   deedsBy(r: Resident): Deed[] {
     return this.deeds.filter((d) => d.actorId === r.profile.id);
   }
@@ -3523,12 +3533,14 @@ export class Simulation {
           const mine = Math.round(to.skills[skill]);
           this.remember(to, `${A}に${label}を教わろうとしたが、${A}の${label}の腕前（${theirs}）は自分（${mine}）${theirs < mine ? 'より下手だった' : 'とほとんど変わらなかった'}`);
           this.remember(from, `${B}に${label}を教えようとしたが、自分の腕前（${theirs}）では${B}（${mine}）に教えられることはなかった`);
-          // 教えると言ったのに何も教われなかった：見栄やあてずっぽうの約束は、相手の不信を招く
+          // 教えると言ったのに何も教われなかった：見栄やあてずっぽうの約束は、相手の不信を招く。同じことが重なるほど深まる
+          const key = `${from.profile.id}>${to.profile.id}>${skill}`;
+          const times = (this.teachFails[key] = (this.teachFails[key] ?? 0) + 1);
           this.feel(
             to,
             from,
-            theirs < mine ? -8 : -5,
-            `${this.clock.day}日目、${label}を教えると言ったのに、${theirs < mine ? '自分より下手だった' : '何も教われなかった'}`,
+            -(theirs < mine ? 8 : 5) * Math.min(times, 3),
+            `${this.clock.day}日目、${label}を教えると言ったのに、${theirs < mine ? '自分より下手だった' : '何も教われなかった'}${times > 1 ? `（これで${times}回目）` : ''}`,
           );
           return;
         }

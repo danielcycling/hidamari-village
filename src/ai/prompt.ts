@@ -181,6 +181,11 @@ function between(sim: Simulation, self: Resident, other: Resident): string[] {
   if (theirJob?.employerId === self.profile.id) lines.push(`${other.profile.name}を日給${theirJob.wage}Gで雇っている`);
   const skills = skillComparison(self, other);
   if (skills) lines.push(skills);
+  // 前に教えようとして無駄だったこと（2人とも覚えている）
+  for (const { skill, times } of sim.teachFailsBetween(other, self))
+    lines.push(`前に${other.profile.name}が${SKILLS[skill]}を教えると言ったが、何も教われなかった（${times}回）。口先だけの人かもしれない`);
+  for (const { skill, times } of sim.teachFailsBetween(self, other))
+    lines.push(`前に${other.profile.name}に${SKILLS[skill]}を教えると言ったが、自分の腕では教えられなかった（${times}回）`);
   const notes = self.relations[other.profile.id]?.notes ?? [];
   if (notes.length > 0) lines.push(`${other.profile.name}への気持ちの理由: ${notes.slice(0, 3).map((n) => n.text).join('／')}`);
   return lines;

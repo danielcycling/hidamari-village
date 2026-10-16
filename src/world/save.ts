@@ -83,6 +83,7 @@ export interface SaveData {
   peddler?: Simulation['peddler'];
   plots?: Simulation['plots'];
   villageTreasury?: number;
+  teachFails?: Record<string, number>;
   moneyFlow?: Simulation['moneyFlow'];
   orgSeq?: number;
   laws?: Law[];
@@ -156,6 +157,7 @@ export function serialize(sim: Simulation, autoGod: boolean): SaveData {
     peddler: sim.peddler,
     plots: sim.plots,
     villageTreasury: sim.villageTreasury,
+    teachFails: sim.teachFails,
     moneyFlow: sim.moneyFlow,
     orgSeq: sim.orgSeq,
     laws: sim.laws,
@@ -254,6 +256,7 @@ export function restore(sim: Simulation, data: SaveData): void {
   if (data.peddler) sim.peddler = data.peddler;
   if (data.plots) replace(sim.plots, data.plots);
   sim.villageTreasury = data.villageTreasury ?? 0;
+  sim.teachFails = data.teachFails ?? {};
   if (data.moneyFlow) Object.assign(sim.moneyFlow, data.moneyFlow);
   sim.orgSeq = data.orgSeq ?? 0;
   sim.assemblySeq = data.assemblySeq ?? 0;
